@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.spec
+.env/
+.venv/
+venv/
+ENV/
+
+# VS Code
+.vscode/.ropeproject/
+.vscode/*.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data
+data/

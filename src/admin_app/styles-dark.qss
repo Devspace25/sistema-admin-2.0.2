@@ -1,0 +1,127 @@
+QWidget { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; color: #ffffff; selection-background-color: #243244; selection-color: #e2e8f0; }
+#SidebarNav { background: #0f172a; border-right: 1px solid #1e293b; }
+#SidebarNav QPushButton { text-align: left; padding: 10px 12px; border: none; border-radius: 8px; color: #ffffff; background: transparent; }
+#SidebarNav QPushButton:hover { color: #ffffff; }
+#SidebarNav QPushButton:hover { background: #1e293b; }
+#SidebarNav QPushButton:checked { background: #FF6900; color: #ffffff; }
+QStatusBar { background: #0b1220; color: #94a3b8; }
+#KpiCard { background: #0b1220; border: 1px solid #243244; border-radius: 10px; padding: 14px; }
+*[kpiTitle="true"] { color: #94a3b8; font-size: 12.5px; }
+*[kpiValue="true"] { font-weight: bold; font-size: 24px; color: #e5e7eb; }
+
+/* Login */
+#LoginFrame { background: transparent; border: none; border-radius: 10px; }
+#LoginTitle { font-size: 20px; font-weight: 600; color: #e5e7eb; }
+#LoginSubtitle { color: #94a3b8; margin-bottom: 6px; }
+
+/* Botones primarios naranja en modo oscuro */
+QPushButton {
+	background-color: #1f2937; /* neutro oscuro */
+	color: #e5e7eb;
+	border: 1px solid #374151;
+	border-radius: 6px;
+	padding: 6px 10px;
+}
+QPushButton:hover { background-color: #273444; }
+QPushButton:pressed { background-color: #1b2532; }
+
+/* Primario explícito */
+QPushButton[accent="primary"], QPushButton#Primary {
+	background-color: #FF6900;
+	color: #0b1220;
+	border: 1px solid #d65e00;
+}
+QPushButton[accent="primary"]:hover, QPushButton#Primary:hover { background-color: #ff7f1a; }
+QPushButton[accent="primary"]:pressed, QPushButton#Primary:pressed { background-color: #d65e00; }
+QPushButton:disabled {
+	background-color: #1f2937;
+	color: #6b7280;
+	border-color: #374151;
+}
+QDialogButtonBox QPushButton { min-width: 84px; }
+
+/* Selección en listas/desplegables */
+QComboBox QAbstractItemView::item:selected,
+QListView::item:selected,
+QTreeView::item:selected,
+QTableView::item:selected { background: #243244; color: #e2e8f0; }
+
+/* Foco en campos de entrada */
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus,
+QComboBox:focus { border: 1px solid #334155; }
+
+/* Indicadores de selección */
+QCheckBox::indicator:checked { background: #243244; border: 1px solid #334155; }
+QRadioButton::indicator:checked { background: #243244; border: 1px solid #334155; }
+
+/* Tablas (mejor contraste en modo oscuro) */
+QTableView, QTableWidget {
+	background-color: #111827;           /* fondo celdas */
+	color: #e5e7eb;                      /* texto celdas */
+	gridline-color: #374151;             /* líneas de la grilla */
+	selection-background-color: #243244;
+	selection-color: #ffffff;            /* texto selección más claro */
+	alternate-background-color: #0f172a;
+}
+QTableView::viewport, QTableWidget::viewport { background-color: #111827; }
+QTableView::item, QTableWidget::item { background-color: #111827; color: #e5e7eb; padding: 4px; }
+QTableView::item:selected, QTableWidget::item:selected {
+	background-color: #243244;
+	color: #ffffff;
+}
+QTableView::item:selected:active, QTableWidget::item:selected:active { background-color: #243244; color: #ffffff; }
+QTableView::item:selected:!active, QTableWidget::item:selected:!active { background-color: #243244; color: #ffffff; }
+QTableView::item:disabled, QTableWidget::item:disabled { color: #9ca3af; }
+
+/* Encabezados de tabla */
+QHeaderView::section {
+	background-color: #0b1220;
+	color: #cbd5e1;
+	border: 1px solid #243244;
+	padding: 6px;
+}
+QHeaderView::section:horizontal { background-color: #0b1220; }
+QHeaderView::section:vertical { background-color: #0b1220; }
+
+/* Estilo específico para la tabla de valores del módulo de parámetros */
+#ParamValuesTable {
+	background-color: #2d2d2d;
+	color: #e5e7eb;
+	alternate-background-color: #0f172a;
+	gridline-color: #374151;
+	selection-background-color: #243244;
+	selection-color: #111827;
+	outline: 0;
+}
+#ParamValuesTable::viewport { background-color: #2d2d2d; }
+#ParamValuesTable::item { background-color: #2d2d2d; color: #e5e7eb; padding: 4px; }
+#ParamValuesTable::item:!selected { background-color: #2d2d2d; color: #e5e7eb; }
+#ParamValuesTable::item:selected { background-color: #243244; color: #111827; }
+#ParamValuesTable::item:selected:active { background-color: #243244; color: #111827; }
+#ParamValuesTable::item:selected:!active { background-color: #243244; color: #111827; }
+#ParamValuesTable::item:hover { background-color: #1b2532; }
+#ParamValuesTable QLineEdit,
+#ParamValuesTable QComboBox,
+#ParamValuesTable QSpinBox,
+#ParamValuesTable QDoubleSpinBox,
+#ParamValuesTable QTextEdit {
+	background-color: #2d2d2d;
+	color: #e5e7eb;
+	border: 1px solid #334155;
+}
+QTableWidget QTableCornerButton::section {
+	background: #0b1220;
+	border: 1px solid #243244;
+}
+
+/* Editores dentro de tablas */
+QTableView QLineEdit, QTableWidget QLineEdit,
+QTableView QComboBox, QTableWidget QComboBox,
+QTableView QSpinBox, QTableWidget QSpinBox,
+QTableView QDoubleSpinBox, QTableWidget QDoubleSpinBox,
+QTableView QTextEdit, QTableWidget QTextEdit {
+	background: #1f2937;
+	color: #e5e7eb;
+	border: 1px solid #334155;
+}

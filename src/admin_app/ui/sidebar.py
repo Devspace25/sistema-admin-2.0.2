@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSizePolicy, QSpacerItem, QLabel
+
+
+class SidebarNav(QWidget):
+    moduleSelected = Signal(str)  # values: home|clientes|productos|ventas|reportes_diarios|reportes|pedidos|configuracion
+    logoutRequested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SidebarNav")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._buttons: dict[str, QPushButton] = {}
+
+        # Rótulo con usuario (si MainWindow lo expone). Se actualizará en construcción.
+        try:
+            mw = self.window()
+            user = getattr(mw, "_current_user", None)
+            if user:
+                user_lbl = QLabel(f"Usuario: {user}")
+                user_lbl.setObjectName("SidebarUserLabel")
+                layout.addWidget(user_lbl)
+        except Exception:
+            pass
+        icon_map = {
+            "home": "assets/icons/home.svg",
+            "clientes": "assets/icons/users.svg",
+            "productos": "assets/icons/box.svg",
+            "ventas": "assets/icons/cart.svg",
+            "reportes_diarios": "assets/icons/chart.svg",
+            "reportes": "assets/icons/chart.svg",
+            "pedidos": "assets/icons/clipboard.svg",
+            "configuracion": "assets/icons/lock.svg",
+        }
+        for key, text in [
+            ("home", "Home"),
+            ("clientes", "Clientes"),
+            ("productos", "Productos"),
+            ("ventas", "Ventas"),
+            ("reportes_diarios", "Reportes Diarios"),
+            ("reportes", "Reportes"),
+            ("pedidos", "Pedidos"),
+            ("configuracion", "Configuración"),
+        ]:
+            btn = QPushButton(text, self)
+            btn.setObjectName(f"nav_{key}")
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked, k=key: self._on_click(k))
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            icon_rel = icon_map.get(key)
+            if icon_rel:
+                btn.setIcon(QIcon.fromTheme("", QIcon(self._resource_path(icon_rel))))
+            layout.addWidget(btn)
+            self._buttons[key] = btn
+
+        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+
+        # Botón de cierre de sesión al fondo
+        self._btn_logout = QPushButton("Cerrar sesión", self)
+        self._btn_logout.setObjectName("nav_logout")
+        self._btn_logout.setCheckable(False)
+        self._btn_logout.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Icono opcional si existiera en assets/icons/logout.svg
+        try:
+            import os
+            icon_path = self._resource_path("assets/icons/logout.svg")
+            if os.path.exists(icon_path):
+                self._btn_logout.setIcon(QIcon.fromTheme("", QIcon(icon_path)))
+        except Exception:
+            pass
+        self._btn_logout.clicked.connect(self._on_logout_click)
+        layout.addWidget(self._btn_logout)
+
+        self.select_module("home")
+
+    def _on_click(self, key: str) -> None:
+        self.select_module(key)
+        self.moduleSelected.emit(key)
+
+    def select_module(self, key: str) -> None:
+        for k, btn in self._buttons.items():
+            btn.setChecked(k == key)
+
+    def _resource_path(self, rel: str) -> str:
+        # Devuelve ruta absoluta dentro del paquete para los recursos
+        import os, sys
+        # Si estamos en un ejecutable PyInstaller, los datos están en sys._MEIPASS
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            return os.path.join(getattr(sys, "_MEIPASS"), rel)
+        # En desarrollo, resolver respecto al paquete fuente (src/admin_app)
+        base = os.path.dirname(os.path.dirname(__file__))  # src/admin_app/ui -> src/admin_app
+        return os.path.join(base, rel)
+
+    def _on_logout_click(self) -> None:
+        self.logoutRequested.emit()
+
+    # --- Permisos/visibilidad ---
+    def set_module_visible(self, module: str, visible: bool) -> None:
+        """Muestra/oculta un botón del menú.
+
+        Si se oculta y estaba seleccionado, vuelve a 'home'.
+        """
+        btn = self._buttons.get(module)
+        if not btn:
+            return
+        btn.setVisible(bool(visible))
+        if not visible and btn.isChecked():
+            self.select_module("home")
+
+    def set_config_visible(self, visible: bool) -> None:
+        """Muestra/oculta el botón de Configuración.
+
+        Si se oculta y estaba seleccionado, vuelve a 'home'.
+        """
+        self.set_module_visible("configuracion", visible)
+
+    def configure_permissions(self, user_permissions: set[str]) -> None:
+        """Configura la visibilidad de los módulos basado en los permisos del usuario."""
+        # Mapeo de módulos a permisos requeridos
+        module_permissions = {
+            "home": "view_home",
+            "clientes": "view_customers",
+            "productos": "view_products", 
+            "ventas": "view_sales",
+            "reportes": "view_reports",
+            "reportes_diarios": "view_daily_reports",
+            "pedidos": "view_orders",
+            "configuracion": "view_config",
+        }
+        
+        for module, required_perm in module_permissions.items():
+            has_permission = required_perm in user_permissions
+            self.set_module_visible(module, has_permission)

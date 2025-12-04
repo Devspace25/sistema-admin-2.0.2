@@ -1,0 +1,94 @@
+QWidget { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; selection-background-color: #e7edf3; selection-color: #0b1220; }
+
+#SidebarNav {
+  background: #f5f6fa;
+  border-right: 1px solid #e3e6ef;
+}
+#SidebarNav QPushButton {
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent; /* neutro para no heredar botón naranja */
+  color: #9F9FA9; /* iconos y texto inactivos */
+}
+#SidebarNav QPushButton:hover { color: #b8b8c2; }
+#SidebarNav QPushButton:checked {
+  /* Accent naranja reservado para activo */
+  background: #FF6900;
+  color: #ffffff;
+}
+QToolBar {
+  border: none;
+}
+QStatusBar {
+  background: #ffffff;
+}
+
+/* Selección en listas/desplegables */
+QComboBox QAbstractItemView::item:selected,
+QListView::item:selected,
+QTreeView::item:selected,
+QTableView::item:selected { background: #e7edf3; color: #0b1220; }
+
+/* Foco en campos de entrada */
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus,
+QComboBox:focus { border: 1px solid #b9c8d6; }
+
+/* Indicadores de selección */
+QCheckBox::indicator:checked { background: #e1e5ea; border: 1px solid #b6bec8; }
+QRadioButton::indicator:checked { background: #e1e5ea; border: 1px solid #b6bec8; }
+
+/* Botones: estilo primario naranja por defecto */
+QPushButton {
+  background-color: #e5e7eb; /* neutro */
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+QPushButton:hover { background-color: #f1f5f9; }
+QPushButton:pressed { background-color: #dfe3e8; }
+
+/* Botón primario: aplicar manualmente en botones importantes */
+QPushButton[accent="primary"], QPushButton#Primary {
+  background-color: #FF6900;
+  color: #ffffff;
+  border: 1px solid #d65e00;
+}
+QPushButton[accent="primary"]:hover, QPushButton#Primary:hover { background-color: #ff7f1a; }
+QPushButton[accent="primary"]:pressed, QPushButton#Primary:pressed { background-color: #d65e00; }
+QPushButton:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  border-color: #d1d5db;
+}
+
+/* Botonera estándar (OK/Cancel) hereda el estilo */
+QDialogButtonBox QPushButton { min-width: 84px; }
+
+/* KPI Cards */
+#KpiCard {
+  background: #ffffff;
+  border: 1px solid #e6e8ef;
+  border-radius: 10px;
+  padding: 14px;
+}
+*[kpiTitle="true"] {
+  color: #64748b;
+  font-size: 12.5px;
+}
+*[kpiValue="true"] {
+  font-weight: bold;
+  font-size: 24px;
+}
+
+/* Login */
+#LoginFrame {
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+}
+#LoginTitle { font-size: 20px; font-weight: 600; }
+#LoginSubtitle { color: #64748b; margin-bottom: 6px; }
