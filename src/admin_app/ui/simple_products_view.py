@@ -50,15 +50,14 @@ class SimpleProductsView(QWidget):
 
         # Tabla de productos (vista única)
         self.table_products = QTableWidget()
-        self.table_products.setColumnCount(4)
+        self.table_products.setColumnCount(3)
         self.table_products.setHorizontalHeaderLabels([
-            "Nombre", "Descripción", "Creado por", "Fecha creación"
+            "Nombre", "Creado por", "Fecha creación"
         ])
         header = self.table_products.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table_products.setAlternatingRowColors(True)
         self.table_products.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_products.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -90,16 +89,12 @@ class SimpleProductsView(QWidget):
                     name_item.setData(Qt.ItemDataRole.UserRole, product['id'])
                     self.table_products.setItem(row, 0, name_item)
                     
-                    # Descripción
-                    description = product['description'] or "Sin descripción"
-                    self.table_products.setItem(row, 1, QTableWidgetItem(description))
-                    
                     # Creado por
-                    self.table_products.setItem(row, 2, QTableWidgetItem(product['created_by']))
+                    self.table_products.setItem(row, 1, QTableWidgetItem(product['created_by']))
                     
                     # Fecha de creación
                     created_date = product['created_at'].strftime('%d/%m/%Y')
-                    self.table_products.setItem(row, 3, QTableWidgetItem(created_date))
+                    self.table_products.setItem(row, 2, QTableWidgetItem(created_date))
                 
                 # Actualizar el título con la cantidad
                 title_text = f"📦 Productos Configurables ({len(products)} productos)"

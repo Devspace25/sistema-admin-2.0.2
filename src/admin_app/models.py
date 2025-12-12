@@ -358,7 +358,11 @@ class Order(Base):
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
     details_json: Mapped[str] = mapped_column(String(4000), nullable=False)  # JSON con parámetros
     status: Mapped[str | None] = mapped_column(String(50))  # p.ej., NUEVO, EN_PROCESO, LISTO
+    designer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    sale: Mapped["Sale"] = relationship("Sale")
+    designer: Mapped["User"] = relationship("User", foreign_keys=[designer_id])
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"Order(id={self.id!r}, order_number={self.order_number!r}, sale_id={self.sale_id!r}, product_name={self.product_name!r})"

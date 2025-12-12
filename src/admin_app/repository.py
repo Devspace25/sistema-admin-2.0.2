@@ -26,7 +26,7 @@ def load_corporeo_form(session: Session, form_id: int) -> dict | None:
 
 # --- CRUD Products (tests expectation) ---
 from .models import Product, DailyReport
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 def add_product(session: Session, *, name: str, category: str | None = None, price: float = 0.0) -> Product:
     p = Product(name=name, category=category, price=price)
@@ -95,6 +95,7 @@ from .models import (
     Order, OrderSequence,
     User, Role, Permission, UserRole, RolePermission,
     SystemConfig,
+    CorporeoConfig, CorporeoPayload,
     # EAV
     EavProductType, EavAttribute, EavTypeAttribute, EavAttributeOption, EavProduct, EavValue
 )
@@ -861,28 +862,33 @@ def list_sales(session: Session) -> list[Sale]:
 
 
 def generate_order_number(session: Session) -> str:
-    """Genera un número de orden único con formato ORD-0000."""
+    """Genera un número de orden único con formato 000000 (6 dígitos)."""
     
-    # Buscar todos los números de orden existentes con formato ORD-XXXX
-    existing_orders = session.query(Sale.numero_orden).filter(
-        Sale.numero_orden.like("ORD-%")
-    ).all()
+    # Obtener todos los números de orden
+    existing_orders = session.query(Sale.numero_orden).all()
     
-    # Extraer los números secuenciales y encontrar el máximo
     max_num = 0
     for (order_num,) in existing_orders:
+        if not order_num:
+            continue
+        
+        # Intentar extraer número de formatos conocidos
         try:
-            # Formato esperado: ORD-0001, ORD-0002, etc.
-            if order_num.startswith("ORD-") and len(order_num) == 8:
-                num_part = order_num[4:]  # Tomar la parte después de "ORD-"
+            # Formato nuevo: "000001"
+            if order_num.isdigit():
+                seq_num = int(order_num)
+                max_num = max(max_num, seq_num)
+            # Formato antiguo: "ORD-0001"
+            elif order_num.startswith("ORD-") and len(order_num) >= 5:
+                num_part = order_num[4:]
                 if num_part.isdigit():
                     seq_num = int(num_part)
                     max_num = max(max_num, seq_num)
-        except (ValueError, IndexError):
+        except ValueError:
             continue
     
     next_num = max_num + 1
-    return f"ORD-{next_num:04d}"
+    return f"{next_num:06d}"
 
 
 def get_bcv_rate() -> float:
@@ -1078,15 +1084,12 @@ def add_sale(
                 session.add(sp)
 
         # Determinar si crear pedido
-        try:
-            prod_name = (obj.articulo or "").lower()
-            has_description = bool(descripcion and str(descripcion).strip())
-            is_corp = ('corp' in prod_name) or has_description
-        except Exception:
-            is_corp = False
+        # Antes se filtraba por 'corp' o descripción. Ahora, por solicitud del usuario,
+        # se asume que toda venta genera un pedido (para seguimiento de estado).
+        create_order = True
 
         created_order_id = None
-        if is_corp:
+        if create_order:
             # Construir detalles estructurados para facilitar búsquedas
             # Sanear la descripción: eliminar segmentos de subtotal/total que el usuario haya pegado
             saned_desc = ''
@@ -1140,8 +1143,8 @@ def add_sale(
                 }
             }
             # Crear order dentro de la misma sesión antes del commit. Añadir order_number al payload
-            # Generar número de orden y anexarlo al details_struct.meta
-            order_number = get_next_order_number(session)
+            # Usar el mismo número de orden de la venta
+            order_number = obj.numero_orden
             try:
                 details_struct.setdefault('meta', {})
                 details_struct['meta']['order_number'] = order_number
@@ -1307,6 +1310,19 @@ def delete_sale_by_id(session: Session, sale_id: int) -> bool:
     obj = session.get(Sale, sale_id)
     if not obj:
         return False
+    
+    # Delete associated orders first to maintain consistency
+    orders = session.query(Order).filter(Order.sale_id == sale_id).all()
+    for order in orders:
+        # Also clean up Corporeo payloads/configs linked to this order
+        session.query(CorporeoPayload).filter(CorporeoPayload.order_id == order.id).delete()
+        session.query(CorporeoConfig).filter(CorporeoConfig.order_id == order.id).delete()
+        session.delete(order)
+    
+    # Clean up any Corporeo payloads/configs linked directly to the sale (if any remain)
+    session.query(CorporeoPayload).filter(CorporeoPayload.sale_id == sale_id).delete()
+    session.query(CorporeoConfig).filter(CorporeoConfig.sale_id == sale_id).delete()
+        
     session.delete(obj)
     session.commit()
     return True
@@ -1463,10 +1479,15 @@ def reserve_draft_order(session: Session, *, sale_id: int | None = None, product
     return obj
 
 def list_orders(session: Session) -> list[Order]:
-    return session.query(Order).order_by(Order.id.desc()).all()
+    return session.query(Order).options(joinedload(Order.sale), joinedload(Order.designer)).order_by(Order.id.desc()).all()
 
 def get_order_by_id(session: Session, order_id: int) -> Order | None:
     return session.get(Order, order_id)
+
+def get_order_full(session: Session, order_id: int) -> Order | None:
+    """Retorna el pedido con sus relaciones cargadas (sale, designer)."""
+    return session.query(Order).options(joinedload(Order.sale), joinedload(Order.designer)).filter(Order.id == order_id).first()
+
 
 
 def get_order_for_sale(session: Session, sale_id: int) -> Order | None:

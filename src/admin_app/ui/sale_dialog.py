@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 import unicodedata
 
 from ..exchange import get_bcv_rate, get_rate_for_date
-from ..repository import list_customers, add_customers, list_configurable_products, eav_list_types
+from ..repository import list_customers, add_customers, list_configurable_products, eav_list_types, generate_order_number
 from ..db import make_engine, make_session_factory
 from ..models import Customer, User, Role, UserRole
 from .customer_dialog import CustomerDialog
@@ -82,6 +82,7 @@ class SaleDialog(QDialog):
         # Poblar listas de clientes y productos
         try:
             self._populate_lookups()
+            self._load_order_number()
         except Exception:
             pass
 
@@ -187,7 +188,9 @@ class SaleDialog(QDialog):
         grid_venta.addWidget(QLabel(today, self), 0, 1)
         
         grid_venta.addWidget(QLabel("Orden:", self), 0, 2)
-        grid_venta.addWidget(QLabel("ORD-2025-083", self), 0, 3) # Placeholder/Dynamic
+        self.lbl_orden = QLabel("...", self)
+        self.lbl_orden.setStyleSheet("font-weight: bold; color: #2196F3;")
+        grid_venta.addWidget(self.lbl_orden, 0, 3)
         
         # Row 1
         grid_venta.addWidget(QLabel("Fecha Pago:", self), 1, 0)
@@ -462,7 +465,9 @@ class SaleDialog(QDialog):
 
     def _on_line_product_changed(self, cmb: QComboBox) -> None:
         # Logic to handle product selection (e.g. set default price)
-        pass
+        prod_name = cmb.currentText()
+        if prod_name and not prod_name.startswith('----'):
+            self.edt_descripcion.setText(prod_name)
 
     def _on_configure_line_product(self, btn: QPushButton) -> None:
         # Find row
@@ -510,21 +515,35 @@ class SaleDialog(QDialog):
                         tables = _repo.get_product_parameter_tables(s, prod_id)
                     if tables:
                         from .product_config_dialog import ProductConfigDialog
-                        dlg = ProductConfigDialog(sf, product_id=prod_id)
+                        
+                        # Retrieve previous payload
+                        prev_data = None
+                        item = self.tbl_product_lines.item(row, 0)
+                        if item:
+                            prev_data = item.data(Qt.UserRole)
+
+                        dlg = ProductConfigDialog(sf, product_id=prod_id, initial_data=prev_data)
                         if dlg.exec():
                             summary = dlg.get_pricing_summary() or {}
                             total_usd = float(summary.get('total', 0.0) or 0.0)
+                            config_data = dlg.get_config_data()
                             
                             # Update row fields
                             edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
-                            edt_cant = self.tbl_product_lines.cellWidget(row, 1)
+                            # edt_cant = self.tbl_product_lines.cellWidget(row, 1) # Not used here
                             
                             if total_usd > 0.0:
                                 edt_price_usd.setValue(total_usd)
                             
-                            # Store payload? ProductConfigDialog doesn't seem to return a full payload in the same way, 
-                            # but we can assume summary is enough for now or extend if needed.
-                            # For now, just updating price is the main goal.
+                            # Update main description
+                            desc = summary.get('descripcion', '')
+                            if desc:
+                                self.edt_descripcion.setText(desc)
+                            
+                            # Store payload
+                            payload = {'selections': config_data, 'summary': summary}
+                            if item:
+                                item.setData(Qt.UserRole, payload)
                         return
             except Exception:
                 pass
@@ -580,13 +599,21 @@ class SaleDialog(QDialog):
                 
             if dlg.exec():
                 summary = dlg.get_pricing_summary()
-                total_usd = float(summary.get('total', 0.0)) if isinstance(summary, dict) else 0.0
+                # Use precio_final_usd if available (calculated with corporeo rate), else fallback to total
+                final_price = float(summary.get('precio_final_usd', 0.0)) if isinstance(summary, dict) else 0.0
+                if final_price <= 0:
+                    final_price = float(summary.get('total', 0.0)) if isinstance(summary, dict) else 0.0
+                
                 payload = dlg.get_full_payload()
                 
                 # Update row
                 edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
-                if total_usd > 0.0:
-                    edt_price_usd.setValue(total_usd)
+                if final_price > 0.0:
+                    edt_price_usd.setValue(final_price)
+                    
+                # Update main description
+                if hasattr(dlg, 'build_config_summary'):
+                    self.edt_descripcion.setText(dlg.build_config_summary())
                     
                 # Store payload
                 if item:
@@ -609,10 +636,12 @@ class SaleDialog(QDialog):
         if prod_id:
             initial_data['product_id'] = prod_id
             
-        # Retrieve previous payload? TalonarioDialog takes initial_data but mostly for product_id.
-        # It doesn't seem to support full re-hydration from payload in the same way as Corporeo yet,
-        # or at least the _configure_talonario method didn't show it.
-        # We'll stick to basic opening.
+        # Retrieve previous payload
+        item = self.tbl_product_lines.item(row, 0)
+        if item:
+            prev_data = item.data(Qt.UserRole)
+            if isinstance(prev_data, dict):
+                initial_data.update(prev_data)
         
         try:
             from .talonario_dialog import TalonarioDialog
@@ -627,6 +656,10 @@ class SaleDialog(QDialog):
                     
                     if total > 0.0:
                         edt_price_usd.setValue(total)
+                        
+                    # Update main description
+                    if hasattr(dlg, 'build_config_summary'):
+                        self.edt_descripcion.setText(dlg.build_config_summary())
                         
                     # Store payload
                     item = self.tbl_product_lines.item(row, 0)
@@ -1127,7 +1160,7 @@ class SaleDialog(QDialog):
             self.edt_serial, self.btn_add_item, self.chk_edit_price,
             # Widgets adicionales que quedaron flotando
             self.edt_tasa_bcv, self.out_iva_subtotal, self.tbl_items,
-            self.edt_descripcion, self.edt_ingresos, self.edt_fecha_pago_2
+            self.edt_ingresos, self.edt_fecha_pago_2
         ]:
             try:
                 w.hide()
@@ -1184,6 +1217,19 @@ class SaleDialog(QDialog):
                 self.edt_articulo.addItem("----Selecione----", None)
                 for p in conf_products:
                     self.edt_articulo.addItem(p.get('name'), int(p.get('id')))
+        except Exception:
+            pass
+
+    def _load_order_number(self) -> None:
+        """Cargar el siguiente número de orden."""
+        sf = self._ensure_session_factory()
+        if sf is None:
+            return
+        try:
+            with sf() as session:
+                next_order = generate_order_number(session)
+                if hasattr(self, 'lbl_orden'):
+                    self.lbl_orden.setText(next_order)
         except Exception:
             pass
 
@@ -1603,7 +1649,11 @@ class SaleDialog(QDialog):
 
             # 3. Determine main article name
             if len(items) > 1:
-                articulo = f"Venta de {len(items)} items"
+                # Join names, truncate if too long
+                names = [i['product_name'] for i in items]
+                articulo = ", ".join(names)
+                if len(articulo) > 190: # Limit for DB column
+                    articulo = articulo[:187] + "..."
             elif items:
                 articulo = items[0]['product_name']
             else:
@@ -1801,6 +1851,11 @@ class SaleDialog(QDialog):
 
     def set_data(self, data: dict) -> None:
         try:
+            # 0. Orden (si existe)
+            if v := data.get("numero_orden"):
+                if hasattr(self, 'lbl_orden'):
+                    self.lbl_orden.setText(v)
+
             # 1. Asesor
             if v := data.get("asesor"):
                 if hasattr(self, 'lbl_asesor'):
@@ -1896,6 +1951,12 @@ class SaleDialog(QDialog):
                     w_price_usd = self.tbl_product_lines.cellWidget(row, 2)
                     try: w_price_usd.setValue(float(data.get("precio_unitario", 0.0)))
                     except: pass
+                    
+                    # Restore payload if available (from _corporeo_payload attribute set by caller)
+                    if hasattr(self, '_corporeo_payload') and self._corporeo_payload:
+                        it = self.tbl_product_lines.item(row, 0)
+                        if it:
+                            it.setData(Qt.UserRole, self._corporeo_payload)
 
             # 5. Payments
             if hasattr(self, 'tbl_payments'):

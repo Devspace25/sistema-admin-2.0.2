@@ -29,10 +29,11 @@ class ProductConfigDialog(QDialog):
 
     PRICE_KEYS = ('precio', 'precio_unit', 'precio_usd', 'costo', 'monto', 'price')
 
-    def __init__(self, session_factory, *, product_id: int):
+    def __init__(self, session_factory, *, product_id: int, initial_data: dict | None = None):
         super().__init__()
         self.session_factory = session_factory
         self.product_id = product_id
+        self.initial_data = initial_data
         self.setWindowTitle("Configurar Producto")
         self._combos: Dict[int, QComboBox] = {}
         self._selected_data: Dict[int, Dict[str, Any]] = {}
@@ -41,6 +42,59 @@ class ProductConfigDialog(QDialog):
         self._build_ui()
         self._load_tables()
         self._wire_logic()
+        
+        if self.initial_data:
+            self._restore_state()
+
+    def _restore_state(self):
+        """Restaurar selecciones previas si existen."""
+        try:
+            selections = self.initial_data.get('selections', {})
+            if not selections:
+                return
+                
+            # Iterar sobre los combos y establecer valores
+            # Es importante hacerlo en orden para respetar dependencias padre-hijo
+            # Primero las tablas raíz (sin padre)
+            sorted_tables = []
+            visited = set()
+            
+            def visit(tid):
+                if tid in visited: return
+                visited.add(tid)
+                # Visitar padre primero si existe
+                parent_id = self._tables[tid].get('parent_table_id')
+                if parent_id and parent_id in self._tables:
+                    visit(parent_id)
+                sorted_tables.append(tid)
+                
+            for tid in self._tables:
+                visit(tid)
+                
+            for tid in sorted_tables:
+                val_id = selections.get(tid)
+                if val_id is None:
+                    val_id = selections.get(str(tid))
+                
+                if val_id is not None:
+                    combo = self._combos.get(tid)
+                    if combo:
+                        # Buscar el índice del item con ese ID
+                        idx = combo.findData(val_id)
+                        if idx >= 0:
+                            combo.setCurrentIndex(idx)
+                            # Forzar actualización para cargar hijos
+                            # Nota: _on_combo_change no existe como tal, usamos la lambda conectada
+                            # Pero la lambda espera (idx).
+                            # Podemos llamar manualmente a la logica si es necesario, 
+                            # pero al hacer setCurrentIndex, la señal currentIndexChanged se dispara?
+                            # Si, a menos que blockSignals(True) este activo.
+                            # En __init__ no hemos bloqueado señales.
+                            # PERO, las señales estan conectadas en _wire_logic() que se llama ANTES de _restore_state().
+                            # Asi que setCurrentIndex disparará la logica.
+                            pass
+        except Exception as e:
+            print(f"Error restaurando estado: {e}")
 
     # --- UI ---
     def _build_ui(self):

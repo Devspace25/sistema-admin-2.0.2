@@ -391,12 +391,32 @@ class TalonarioDialog(QDialog):
         detalles = self.initial_data.get('detalles', {})
         if 'descripcion' in detalles:
             self.edt_descripcion.setText(detalles['descripcion'])
+            
+        ids = detalles.get('ids_seleccionados', {})
         
-        # Intentar restaurar combos por texto si no tenemos IDs guardados, o por IDs si los tenemos
-        if 'tamano' in detalles:
-            self.cbo_tamano.setCurrentText(detalles['tamano'])
-        if 'papel' in detalles:
-            self.cbo_papel.setCurrentText(detalles['papel'])
+        # Helper para setear combo
+        def set_combo(cbo: QComboBox, key_text: str, key_id: str):
+            # Intentar por ID primero
+            if ids and key_id in ids:
+                val = ids[key_id]
+                idx = cbo.findData(val)
+                if idx >= 0:
+                    cbo.setCurrentIndex(idx)
+                    return
+            # Fallback por texto
+            if key_text in detalles:
+                txt = detalles[key_text]
+                idx = cbo.findText(txt)
+                if idx >= 0:
+                    cbo.setCurrentIndex(idx)
+                else:
+                    cbo.setCurrentText(txt)
+
+        set_combo(self.cbo_impresion, 'impresion', 'impresion')
+        set_combo(self.cbo_tipo_talonario, 'tipo_talonario', 'tipo')
+        set_combo(self.cbo_tamano, 'tamano', 'tamano')
+        set_combo(self.cbo_papel, 'papel', 'papel')
+
         if 'cantidad' in detalles:
             try:
                 self.spin_cantidad.setValue(int(detalles['cantidad']))
@@ -457,3 +477,40 @@ class TalonarioDialog(QDialog):
             'total': self.accepted_data.get('precio_total', 0.0),
             'cantidad': self.accepted_data.get('cantidad', 1)
         }
+
+    def build_config_summary(self) -> str:
+        """Genera un resumen legible de la configuración."""
+        if not self.accepted_data:
+            return ""
+        
+        detalles = self.accepted_data.get('detalles', {})
+        parts = []
+        
+        tipo = detalles.get('tipo_talonario')
+        if tipo and not tipo.startswith('--'):
+            parts.append(tipo)
+            
+        tamano = detalles.get('tamano')
+        if tamano and not tamano.startswith('--'):
+            parts.append(tamano)
+            
+        papel = detalles.get('papel')
+        if papel and not papel.startswith('--'):
+            parts.append(papel)
+            
+        impresion = detalles.get('impresion')
+        if impresion and not impresion.startswith('--'):
+            parts.append(impresion)
+            
+        cant = detalles.get('cantidad')
+        if cant:
+            parts.append(f"{cant} unds")
+            
+        if detalles.get('copia_adicional'):
+            parts.append("Con Copia")
+            
+        desc = detalles.get('descripcion')
+        if desc:
+            parts.append(f"({desc})")
+            
+        return " - ".join(parts)

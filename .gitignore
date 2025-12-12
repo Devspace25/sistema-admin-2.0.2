@@ -25,3 +25,5 @@ Thumbs.db
 
 # Project data
 data/
+
+releases/*.zip

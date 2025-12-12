@@ -67,7 +67,6 @@ class MainWindow(QMainWindow):
         self._products_view = SimpleProductsView(self._session_factory)
         self._sales_view = SalesView(self._session_factory, self)
         self._daily_reports_view = DailyReportsView(self._session_factory, parent=self, current_user=self._current_user)
-        self._reports_view = Placeholder("Reportes")
 
         # Importaciones locales para evitar ciclos y vistas adicionales
         self._orders_view = OrdersView(self._session_factory)
@@ -78,9 +77,8 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._products_view)       # 2
         self._stack.addWidget(self._sales_view)          # 3
         self._stack.addWidget(self._daily_reports_view)  # 4
-        self._stack.addWidget(self._reports_view)        # 5
-        self._stack.addWidget(self._orders_view)         # 6
-        self._stack.addWidget(self._config_view)         # 7
+        self._stack.addWidget(self._orders_view)         # 5
+        self._stack.addWidget(self._config_view)         # 6
 
         self.setCentralWidget(container)
 
@@ -122,7 +120,7 @@ class MainWindow(QMainWindow):
                         # Lista de permisos que pueden ser relevantes para la interfaz
                         all_perms = [
                             "view_home", "view_customers", "edit_customers", "view_products", "edit_products",
-                            "view_sales", "edit_sales", "view_daily_reports", "view_reports", "view_orders", 
+                            "view_sales", "edit_sales", "view_daily_reports", "view_orders", 
                             "edit_orders", "view_parametros_materiales", "edit_parametros_materiales",
                             "view_config", "edit_config"
                         ]
@@ -281,7 +279,6 @@ class MainWindow(QMainWindow):
             "productos": "view_products", 
             "ventas": "view_sales",
             "reportes_diarios": "view_daily_reports",
-            "reportes": "view_reports",
             "pedidos": "view_orders",
             "configuracion": "view_config",
         }
@@ -301,9 +298,8 @@ class MainWindow(QMainWindow):
             "productos": 2,
             "ventas": 3,
             "reportes_diarios": 4,
-            "reportes": 5,
-            "pedidos": 6,
-            "configuracion": 7,
+            "pedidos": 5,
+            "configuracion": 6,
         }
         self._stack.setCurrentIndex(index_map.get(module_key, 0))
         # Las acciones específicas viven dentro de cada módulo

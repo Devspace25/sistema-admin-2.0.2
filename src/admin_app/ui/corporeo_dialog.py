@@ -1008,6 +1008,24 @@ class CorporeoDialog(QDialog):
         except Exception:
             pass
 
+        # Connect material change to populate espesor
+        try:
+            self.cbo_material.currentIndexChanged.connect(self._on_material_changed)
+        except Exception:
+            pass
+
+        # Connect soporte item change to populate sizes
+        try:
+            self.cbo_soporte_item.currentIndexChanged.connect(self._on_soporte_item_changed)
+        except Exception:
+            pass
+
+        # Connect soporte size change to update price
+        try:
+            self.cbo_soporte_size.currentIndexChanged.connect(self._on_soporte_size_changed)
+        except Exception:
+            pass
+
     def _update_caja_controls_enabled(self) -> None:
         """Habilita o deshabilita los controles de la Sección 7 según el checkbox `chk_caja`."""
         try:
@@ -3804,19 +3822,141 @@ class CorporeoDialog(QDialog):
             return 36.0  # Valor por defecto
 
     def build_config_summary(self) -> str:
-        parts = [f"Producto: {self.txt_name.text().strip()}"]
-        desc = self.txt_desc.toPlainText().strip()
-        if desc:
-            parts.append(f"Descripción: {desc}")
-        alto = self.spin_alto.value(); ancho = self.spin_ancho.value()
-        parts.append(f"Medidas: {alto:.1f} x {ancho:.1f} cm")
-        parts.append(f"Área: {self.lbl_area.text()} m²  Subtotal: {self.lbl_subtotal.text()}  Total: {self.lbl_total.text()}")
-        # material
-        mat = self.cbo_material.currentText().strip() if hasattr(self, 'cbo_material') else ''
-        esp = self.cbo_espesor.currentText().strip() if hasattr(self, 'cbo_espesor') else ''
+        parts = []
+
+        # 1. Cortes (Impresion, Relieve, etc) - Moved to start
+        cortes = []
+        if hasattr(self, 'cut_checkboxes'):
+            for cb in self.cut_checkboxes:
+                if cb.isChecked():
+                    cortes.append(cb.text())
+        # Legacy combo
+        if hasattr(self, 'cbo_corte') and self.cbo_corte.currentIndex() > 0:
+            t = self.cbo_corte.currentText()
+            if t and not t.startswith('--') and t not in cortes:
+                cortes.append(t)
+        if cortes:
+            parts.append(", ".join(cortes))
+
+        # 2. Medidas
+        alto = self.spin_alto.value()
+        ancho = self.spin_ancho.value()
+        parts.append(f"{alto:.0f}x{ancho:.0f} cm")
+
+        # 3. Material
+        mat = ""
+        if hasattr(self, 'cbo_material'):
+            t = self.cbo_material.currentText()
+            if t and not t.startswith('--'):
+                mat = t
+        esp = ""
+        if hasattr(self, 'cbo_espesor'):
+            t = self.cbo_espesor.currentText()
+            if t and not t.startswith('--'):
+                esp = t
         if mat or esp:
-            parts.append(f"Material: {mat}  Espesor: {esp}")
-        return "\n".join(parts)
+            parts.append(f"{mat} {esp}".strip())
+
+        # 4. Acabado / Color
+        finish_parts = []
+        if hasattr(self, 'chk_base_transp') and self.chk_base_transp.isChecked():
+            finish_parts.append("Transparente")
+        if hasattr(self, 'chk_base_crudo') and self.chk_base_crudo.isChecked():
+            finish_parts.append("Crudo")
+        if hasattr(self, 'txt_base_color'):
+            c = self.txt_base_color.text().strip()
+            if c:
+                finish_parts.append(c)
+        if finish_parts:
+            parts.append(", ".join(finish_parts))
+
+        # 5. Tipo (Shape) - Moved here, multiple allowed
+        tipos = []
+        if hasattr(self, 'tipo_corp_checkboxes'):
+            for cb, _, _ in self.tipo_corp_checkboxes:
+                if cb.isChecked():
+                    tipos.append(cb.text())
+        
+        if not tipos:
+             # Fallback if nothing checked
+             name = self.txt_name.text().strip()
+             if name:
+                 tipos.append(name)
+             else:
+                 tipos.append("Corpóreo")
+        
+        parts.append(", ".join(tipos))
+
+        # 6. Soportes
+        sop_str = ""
+        if hasattr(self, 'cbo_soporte_item'):
+            item = self.cbo_soporte_item.currentText()
+            if item and not item.startswith('--'):
+                size = ""
+                if hasattr(self, 'cbo_soporte_size'):
+                    s = self.cbo_soporte_size.currentText()
+                    if s and not s.startswith('--'):
+                        size = s
+                qty = 0
+                if hasattr(self, 'spin_soporte_qty'):
+                    qty = int(self.spin_soporte_qty.value())
+                
+                if qty > 0:
+                    sop_str = f"{item} {size} x{qty}".strip()
+        if sop_str:
+            parts.append(sop_str)
+
+        # 7. Luces
+        luz_str = ""
+        if hasattr(self, 'cbo_luz_tipo'):
+            tipo = self.cbo_luz_tipo.currentText()
+            if tipo and not tipo.startswith('--'):
+                luz_parts = [tipo]
+                
+                if hasattr(self, 'cbo_luz_color'):
+                    c = self.cbo_luz_color.currentText()
+                    if c and not c.startswith('--'):
+                        luz_parts.append(c)
+                        
+                if hasattr(self, 'cbo_pos_luz'):
+                    p = self.cbo_pos_luz.currentText()
+                    if p and not p.startswith('--'):
+                        luz_parts.append(p)
+                        
+                # Regulador
+                if hasattr(self, 'cbo_reg_amp'):
+                    reg = self.cbo_reg_amp.currentText()
+                    if reg and not reg.startswith('--'):
+                        qty_reg = 0
+                        if hasattr(self, 'spin_reg_cant'):
+                            qty_reg = int(self.spin_reg_cant.value())
+                        if qty_reg > 0:
+                            luz_parts.append(f"{reg} x{qty_reg}")
+                            
+                luz_str = ", ".join(luz_parts)
+        if luz_str:
+            parts.append(luz_str)
+
+        # 8. Caja de Luz
+        caja_str = "Caja de Luz: No"
+        if hasattr(self, 'chk_caja') and self.chk_caja.isChecked():
+            caja_parts = ["Caja de Luz: Si"]
+            
+            if hasattr(self, 'cbo_caja_base'):
+                base = self.cbo_caja_base.currentText()
+                if base and not base.startswith('--'):
+                    caja_parts.append(base)
+            
+            if hasattr(self, 'cbo_caja_faja'):
+                faja = self.cbo_caja_faja.currentText()
+                if faja and not faja.startswith('--'):
+                    caja_parts.append(faja)
+            
+            caja_str = ", ".join(caja_parts)
+        
+        parts.append(caja_str)
+
+        return " | ".join(parts)
 
     def get_pricing_summary(self) -> dict:
         try:
@@ -3863,5 +4003,193 @@ class CorporeoDialog(QDialog):
             'cantidad': cantidad,
             'descripcion': self.txt_desc.toPlainText().strip(),
         }
+
+    def get_full_payload(self) -> dict:
+        """Retorna el estado completo del diálogo para persistencia."""
+        # 1. Cortes seleccionados
+        cortes = []
+        # Checkboxes
+        if hasattr(self, 'cut_checkboxes'):
+            for cb in self.cut_checkboxes:
+                if cb.isChecked():
+                    oid = cb.property('opt_id')
+                    cortes.append({
+                        'opt_id': oid,
+                        'tipo': cb.text(),
+                        'label': cb.text(),
+                        'from_combo': False
+                    })
+        # Combo (legacy/compatibilidad)
+        if hasattr(self, 'cbo_corte') and self.cbo_corte.currentIndex() > 0:
+            try:
+                oid = self.cbo_corte.currentData()
+                txt = self.cbo_corte.currentText()
+                cortes.append({
+                    'opt_id': oid,
+                    'tipo': txt,
+                    'label': txt,
+                    'from_combo': True
+                })
+            except Exception:
+                pass
+
+        # 2. Tipos de Corporeo
+        tipos_corporeo = []
+        if hasattr(self, 'tipo_corp_checkboxes'):
+            for cb, _, oid in self.tipo_corp_checkboxes:
+                if cb.isChecked():
+                    tipos_corporeo.append({
+                        'pv_id': oid,
+                        'label': cb.text()
+                    })
+
+        # 3. Material y Espesor
+        mat_id = None
+        mat_text = ""
+        if hasattr(self, 'cbo_material'):
+            mat_id = self.cbo_material.currentData()
+            mat_text = self.cbo_material.currentText()
+            if mat_text.startswith('--'): mat_text = ""
+            
+        esp_id = None
+        esp_text = ""
+        if hasattr(self, 'cbo_espesor'):
+            esp_id = self.cbo_espesor.currentData()
+            esp_text = self.cbo_espesor.currentText()
+            if esp_text.startswith('--'): esp_text = ""
+
+        # 4. Luces
+        luz_selected = []
+        if hasattr(self, 'cbo_luz_tipo'):
+            try:
+                val = self.cbo_luz_tipo.currentData()
+                luz_id = val[0] if isinstance(val, (list, tuple)) and len(val) >= 1 else val
+                luz_text = self.cbo_luz_tipo.currentText()
+                if not luz_text.startswith('--'):
+                    luz_selected.append({'type': luz_text, 'pv_id': luz_id})
+            except Exception:
+                pass
         
+        # Checkboxes de luces (legacy/extras)
+        for chk in (getattr(self, 'chk_led', None), getattr(self, 'chk_neon_m', None), getattr(self, 'chk_ceo', None), getattr(self, 'chk_neon_b', None)):
+            if chk and chk.isChecked():
+                luz_selected.append({'type': chk.text()})
+
+        luz_color = ""
+        if hasattr(self, 'cbo_luz_color'):
+            luz_color = self.cbo_luz_color.currentText()
+            if luz_color.startswith('--'): luz_color = ""
+            
+        luz_pos = ""
+        if hasattr(self, 'cbo_pos_luz'):
+            luz_pos = self.cbo_pos_luz.currentText()
+            if luz_pos.startswith('--'): luz_pos = ""
+
+        # 5. Soporte
+        sop_model = None
+        sop_text = ""
+        if hasattr(self, 'cbo_soporte_item'):
+            sop_model = self.cbo_soporte_item.currentData()
+            sop_text = self.cbo_soporte_item.currentText()
+            if sop_text.startswith('--'): sop_text = ""
+            
+        sop_size = None
+        if hasattr(self, 'cbo_soporte_size'):
+            sop_size = self.cbo_soporte_size.currentData() # Or text if data is missing
+            if not sop_size:
+                sop_size = self.cbo_soporte_size.currentText()
+            if str(sop_size).startswith('--'): sop_size = ""
+            
+        sop_qty = 0
+        if hasattr(self, 'spin_soporte_qty'):
+            sop_qty = self.spin_soporte_qty.value()
+
+        # 6. Regulador
+        reg_id = None
+        if hasattr(self, 'cbo_reg_amp'):
+            reg_id = self.cbo_reg_amp.currentData()
+        reg_qty = 0
+        if hasattr(self, 'spin_reg_cant'):
+            reg_qty = self.spin_reg_cant.value()
+
+        # 7. Caja
+        caja_enabled = False
+        caja_base = ""
+        caja_faja = ""
+        if hasattr(self, 'chk_caja'):
+            caja_enabled = self.chk_caja.isChecked()
+        if hasattr(self, 'cbo_caja_base'):
+            caja_base = self.cbo_caja_base.currentText()
+            if caja_base.startswith('--'): caja_base = ""
+        if hasattr(self, 'cbo_caja_faja'):
+            caja_faja = self.cbo_caja_faja.currentText()
+            if caja_faja.startswith('--'): caja_faja = ""
+
+        # 8. Base Color
+        base_crudo = False
+        base_transp = False
+        base_color_val = ""
+        if hasattr(self, 'chk_base_crudo'): base_crudo = self.chk_base_crudo.isChecked()
+        if hasattr(self, 'chk_base_transp'): base_transp = self.chk_base_transp.isChecked()
+        if hasattr(self, 'txt_base_color'): base_color_val = self.txt_base_color.text()
+
+        summary = self.get_pricing_summary()
+        
+        return {
+            'product_id': self.product_id,
+            'nombre': self.txt_name.text(),
+            'descripcion_user': self.txt_desc.toPlainText(),
+            'medidas': {
+                'alto_cm': self.spin_alto.value(),
+                'ancho_cm': self.spin_ancho.value(),
+                'diam_mm': self.spin_diam.value() if hasattr(self, 'spin_diam') else 0.0
+            },
+            'cortes': cortes,
+            'tipos_corporeo': tipos_corporeo,
+            'material': {
+                'id': mat_id,
+                'label': mat_text
+            },
+            'espesor': {
+                'id': esp_id,
+                'label': esp_text
+            },
+            'luces': {
+                'selected': luz_selected,
+                'color': luz_color,
+                'posicion': luz_pos
+            },
+            'soporte': {
+                'model': sop_model, # ID or text
+                'size': sop_size,
+                'qty': sop_qty
+            },
+            'regulador': {
+                'id': reg_id,
+                'qty': reg_qty
+            },
+            'caja': {
+                'enabled': caja_enabled,
+                'base': caja_base,
+                'faja': caja_faja
+            },
+            'base_color': {
+                'crudo': base_crudo,
+                'transparente': base_transp,
+                'color': base_color_val
+            },
+            'totals': summary,
+            'precio_final_usd': summary.get('precio_final_usd', 0.0),
+            'precio_final_bs': summary.get('precio_final_bs', 0.0),
+            'tasa_corporeo': summary.get('tasa_corporeo', 0.0),
+            'tasa_bcv': summary.get('tasa_bcv', 0.0),
+            'summary': {
+                'descripcion': self.build_config_summary()
+            },
+            # Legacy flat fields for compatibility if needed
+            'material_id': mat_id,
+            'material_text': mat_text,
+            'espesor_id': esp_id,
+            'espesor_text': esp_text,
+        }
 

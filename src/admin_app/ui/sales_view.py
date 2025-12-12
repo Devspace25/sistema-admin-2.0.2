@@ -5,10 +5,10 @@ from PySide6.QtWidgets import (
     QFormLayout, QDialogButtonBox, QGroupBox, QGridLayout, QSpacerItem,
     QSizePolicy, QAbstractItemView
 )
-from PySide6.QtCore import Qt, QDate
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QDate, QEvent
+from PySide6.QtGui import QFont, QColor
 from datetime import datetime
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, joinedload
 import json
 
 from ..models import Sale
@@ -98,7 +98,7 @@ class SalesView(QWidget):
     def _setup_table(self):
         # Configurar columnas de la tabla
         columns = [
-            "ID", "Fecha", "Núm. Orden", "Artículo", "Asesor", "Cliente", "Venta $", 
+            "ID", "Fecha", "Núm. Orden", "Artículo", "Descripción", "Asesor", "Cliente", "Venta $", 
             "Forma Pago", "Serial Billete", "Banco", "Referencia", "Fecha Pago",
             "Monto Bs.D", "Monto $ Calc.", "Tasa BCV", "Abono $", "Restante $", "IVA", "Por Cobrar $",
             "Diseño $", "Ingresos $"
@@ -116,108 +116,184 @@ class SalesView(QWidget):
         
         # Ajustar el ancho de las columnas
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        
-        # Configurar columnas específicas
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # ID
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Fecha
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Núm. Orden
+        # Ajustar todas las columnas al contenido automáticamente
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(False)
         
         # Conectar selección
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        
+        # Instalar filtro de eventos para detectar clics en espacio vacío
+        self.table.viewport().installEventFilter(self)
+
+    def eventFilter(self, source, event):
+        if source == self.table.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            index = self.table.indexAt(event.pos())
+            if not index.isValid():
+                self.table.clearSelection()
+        return super().eventFilter(source, event)
         
     def _load_sales(self):
         """Cargar todas las ventas en la tabla."""
         self._status_label.setText("Cargando ventas...")
         try:
             with self._session_factory() as session:
-                sales = list_sales(session)
+                # Cargar ventas con relaciones (items y payments) para visualización correcta
+                sales = session.query(Sale).options(
+                    joinedload(Sale.items),
+                    joinedload(Sale.payments)
+                ).order_by(Sale.id.desc()).all()
             
-            self.table.setRowCount(len(sales))
-            
-            for row, sale in enumerate(sales):
-                # Llenar cada columna
-                # Determinar nombre de cliente preferido
-                client_name = ''
-                try:
-                    if getattr(sale, 'cliente', None):
-                        client_name = getattr(sale, 'cliente')
-                    elif getattr(sale, 'cliente_id', None):
-                        try:
-                            cust = get_customer_by_id(session, int(getattr(sale, 'cliente_id')))
-                            if cust:
-                                client_name = getattr(cust, 'name', '')
-                        except Exception:
-                            client_name = ''
-                except Exception:
-                    client_name = ''
-
-                # Formatear Artículo (Productos)
-                articulo_display = sale.articulo or ""
-                try:
-                    if hasattr(sale, 'items') and sale.items:
-                        product_counts = {}
-                        for item in sale.items:
-                            name = item.product_name
-                            qty = item.quantity
-                            if name in product_counts:
-                                product_counts[name] += qty
-                            else:
-                                product_counts[name] = qty
-                        
-                        parts = []
-                        for name, total_qty in product_counts.items():
-                            if total_qty > 1:
-                                if total_qty % 1 == 0:
-                                    parts.append(f"{name} x{int(total_qty)}")
-                                else:
-                                    parts.append(f"{name} x{total_qty:.2f}")
-                            else:
-                                parts.append(name)
-                        if parts:
-                            articulo_display = ", ".join(parts)
-                except Exception:
-                    pass
-
-                # Formatear Forma de Pago
-                pago_display = sale.forma_pago or ""
-                try:
-                    if hasattr(sale, 'payments') and sale.payments:
-                        methods = [p.payment_method for p in sale.payments if p.payment_method]
-                        if methods:
-                            pago_display = ", ".join(methods)
-                except Exception:
-                    pass
-
-                items = [
-                    str(sale.id),
-                    sale.fecha.strftime("%d/%m/%Y %H:%M") if sale.fecha else "",
-                    sale.numero_orden or "",
-                    articulo_display,
-                    sale.asesor or "",
-                    client_name or "",
-                    f"${sale.venta_usd:,.2f}" if sale.venta_usd else "$0.00",
-                    pago_display,
-                    sale.serial_billete or "",
-                    sale.banco or "",
-                    sale.referencia or "",
-                    sale.fecha_pago.strftime("%d/%m/%Y") if sale.fecha_pago else "",
-                    f"Bs. {sale.monto_bs:,.2f}" if sale.monto_bs else "",
-                    f"${sale.monto_usd_calculado:,.2f}" if sale.monto_usd_calculado else "",
-                    f"{sale.tasa_bcv:,.2f}" if sale.tasa_bcv else "",
-                    f"${sale.abono_usd:,.2f}" if sale.abono_usd else "",
-                    "",
-                    f"${sale.iva:,.2f}" if sale.iva else "",
-                    f"${sale.restante:,.2f}" if sale.restante else "",
-                    f"${sale.diseno_usd:,.2f}" if sale.diseno_usd else "",
-                    f"${sale.ingresos_usd:,.2f}" if sale.ingresos_usd else "",
-                ]
+                self.table.setRowCount(len(sales))
                 
-                for col, text in enumerate(items):
-                    item = QTableWidgetItem(text)
-                    item.setData(Qt.ItemDataRole.UserRole, sale.id)  # Guardar ID para referencia
-                    self.table.setItem(row, col, item)
+                for row, sale in enumerate(sales):
+                    # Llenar cada columna
+                    # Determinar nombre de cliente preferido
+                    client_name = ''
+                    try:
+                        if getattr(sale, 'cliente', None):
+                            client_name = getattr(sale, 'cliente')
+                        elif getattr(sale, 'cliente_id', None):
+                            try:
+                                cust = get_customer_by_id(session, int(getattr(sale, 'cliente_id')))
+                                if cust:
+                                    client_name = getattr(cust, 'name', '')
+                            except Exception:
+                                client_name = ''
+                    except Exception:
+                        client_name = ''
+
+                    # Formatear Artículo (Productos)
+                    articulo_display = sale.articulo or ""
+                    try:
+                        if hasattr(sale, 'items') and sale.items:
+                            product_counts = {}
+                            for item in sale.items:
+                                name = item.product_name
+                                qty = item.quantity
+                                if name in product_counts:
+                                    product_counts[name] += qty
+                                else:
+                                    product_counts[name] = qty
+                            
+                            parts = []
+                            for name, total_qty in product_counts.items():
+                                if total_qty > 1:
+                                    if total_qty % 1 == 0:
+                                        parts.append(f"{name} x{int(total_qty)}")
+                                    else:
+                                        parts.append(f"{name} x{total_qty:.2f}")
+                                else:
+                                    parts.append(name)
+                            if parts:
+                                articulo_display = ", ".join(parts)
+                    except Exception:
+                        pass
+
+                    # Formatear Forma de Pago y Calcular Ingresos USD reales
+                    pago_display = sale.forma_pago or ""
+                    real_ingresos_usd = 0.0
+                    
+                    try:
+                        if hasattr(sale, 'payments') and sale.payments:
+                            methods = []
+                            for p in sale.payments:
+                                if p.payment_method:
+                                    methods.append(p.payment_method)
+                                    
+                                    # Lógica para Ingresos $: Sumar solo si el método es en divisas
+                                    # Métodos considerados divisas: Efectivo USD, Zelle, Banesco Panamá, Binance, PayPal
+                                    # O cualquier otro que no sea Bs.
+                                    bs_methods = ["Efectivo Bs.D", "Pago móvil", "Transferencia Bs.D", "Punto de Venta"]
+                                    if p.payment_method not in bs_methods:
+                                        real_ingresos_usd += (p.amount_usd or 0.0)
+                                        
+                            if methods:
+                                pago_display = ", ".join(methods)
+                    except Exception:
+                        pass
+
+                    # Construct description from details_json if sale.descripcion is empty or generic
+                    description_text = sale.descripcion or ""
+                    if (not description_text or description_text.strip().lower() == "producto") and sale.details_json:
+                        try:
+                            details = json.loads(sale.details_json)
+                            items_list = details.get('items', [])
+                            parts = []
+                            for i in items_list:
+                                p_name = i.get('product_name', '')
+                                p_details = i.get('details', {})
+                                extra = ""
+                                if isinstance(p_details, dict):
+                                    # Corporeo check
+                                    if 'alto' in p_details and 'ancho' in p_details:
+                                        alto = p_details.get('alto')
+                                        ancho = p_details.get('ancho')
+                                        mat = p_details.get('material_text') or ""
+                                        extra = f"{alto}x{ancho}cm {mat}".strip()
+                                    # ProductConfigDialog check
+                                    elif 'summary' in p_details:
+                                        desc = p_details.get('summary', {}).get('descripcion', '')
+                                        if desc:
+                                            extra = desc
+                                
+                                # Si tenemos detalles extra, usarlos como descripción principal
+                                # Esto evita mostrar "Producto" o "Sello" cuando tenemos "SELLO AUTOMATICO..."
+                                if extra:
+                                    full_desc = extra
+                                else:
+                                    full_desc = p_name or "Producto"
+                                
+                                parts.append(full_desc)
+                            
+                            if parts:
+                                description_text = "; ".join(parts)
+                        except Exception:
+                            pass
+
+                    items = [
+                        str(sale.id),
+                        sale.fecha.strftime("%d/%m/%Y %H:%M") if sale.fecha else "",
+                        sale.numero_orden or "",
+                        articulo_display,
+                        description_text,
+                        sale.asesor or "",
+                        client_name or "",
+                        f"${sale.venta_usd:,.2f}" if sale.venta_usd else "$0.00",
+                        pago_display,
+                        sale.serial_billete or "",
+                        sale.banco or "",
+                        sale.referencia or "",
+                        sale.fecha_pago.strftime("%d/%m/%Y") if sale.fecha_pago else "",
+                        f"Bs. {sale.monto_bs:,.2f}" if sale.monto_bs else "",
+                        f"${sale.monto_usd_calculado:,.2f}" if sale.monto_usd_calculado else "",
+                        f"{sale.tasa_bcv:,.2f}" if sale.tasa_bcv else "",
+                        f"${sale.abono_usd:,.2f}" if sale.abono_usd else "",
+                        "",
+                        f"${sale.iva:,.2f}" if sale.iva else "",
+                        f"${sale.restante:,.2f}" if sale.restante else "",
+                        f"${sale.diseno_usd:,.2f}" if sale.diseno_usd else "",
+                        f"${real_ingresos_usd:,.2f}" if real_ingresos_usd > 0 else "",
+                    ]
+                    
+                    for col, text in enumerate(items):
+                        item = QTableWidgetItem(text)
+                        item.setData(Qt.ItemDataRole.UserRole, sale.id)  # Guardar ID para referencia
+                        
+                        # Colorear Número de Orden (col 2) según deuda
+                        if col == 2:
+                            # Si hay deuda (restante > 0.01), Naranja. Si no, Verde.
+                            restante = sale.restante if sale.restante is not None else 0.0
+                            if restante > 0.01:
+                                item.setForeground(QColor("orange"))
+                            else:
+                                item.setForeground(QColor("green"))
+                            # Hacerlo negrita para que resalte más
+                            font = item.font()
+                            font.setBold(True)
+                            item.setFont(font)
+
+                        self.table.setItem(row, col, item)
                     
             self._status_label.setText(f"✅ {len(sales)} ventas cargadas")
         except Exception as e:
@@ -232,9 +308,9 @@ class SalesView(QWidget):
             should_show = True
             
             if search_text:
-                # Buscar en columnas relevantes: número orden, artículo, asesor
+                # Buscar en columnas relevantes: número orden, artículo, descripción, asesor, cliente
                 match_found = False
-                for col in [2, 3, 4]:  # núm_orden, artículo, asesor
+                for col in [2, 3, 4, 5, 6]:  # núm_orden, artículo, descripción, asesor, cliente
                     item = self.table.item(row, col)
                     if item and search_text in item.text().lower():
                         match_found = True
@@ -587,6 +663,13 @@ class SalesView(QWidget):
                     from ..repository import get_corporeo_payload_by_sale, get_corporeo_by_sale
                     
                     order = get_order_for_sale(session, sale_id)
+                    
+                    # Extract order number if available
+                    if order and getattr(order, 'order_number', None):
+                        data['numero_orden'] = str(order.order_number)
+                    elif getattr(sale, 'numero_orden', None):
+                        data['numero_orden'] = str(sale.numero_orden)
+                        
                     # prefer payload saved in corporeo_payloads (new table)
                     try:
                         cp = get_corporeo_payload_by_sale(session, sale_id)

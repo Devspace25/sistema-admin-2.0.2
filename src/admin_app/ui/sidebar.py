@@ -35,7 +35,6 @@ class SidebarNav(QWidget):
             "productos": "assets/icons/box.svg",
             "ventas": "assets/icons/cart.svg",
             "reportes_diarios": "assets/icons/chart.svg",
-            "reportes": "assets/icons/chart.svg",
             "pedidos": "assets/icons/clipboard.svg",
             "configuracion": "assets/icons/lock.svg",
         }
@@ -45,7 +44,6 @@ class SidebarNav(QWidget):
             ("productos", "Productos"),
             ("ventas", "Ventas"),
             ("reportes_diarios", "Reportes Diarios"),
-            ("reportes", "Reportes"),
             ("pedidos", "Pedidos"),
             ("configuracion", "Configuración"),
         ]:
