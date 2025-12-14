@@ -15,7 +15,23 @@ class SimpleProductsView(QWidget):
     def __init__(self, session_factory):
         super().__init__()
         self.session_factory = session_factory
+        self._can_edit = True
         self._build_ui()
+        self._load_products()
+
+    def set_permissions(self, permissions: set[str]):
+        """Configurar permisos de edición."""
+        self._can_edit = "edit_products" in permissions
+        self._can_create = "create_products" in permissions
+        
+        self.btn_new.setVisible(self._can_create)
+        self.btn_edit.setVisible(self._can_edit)
+        self.btn_parameters.setVisible(self._can_edit)
+        self.btn_values.setVisible(self._can_edit)
+        self.btn_delete.setVisible(self._can_edit)
+        
+    def refresh(self):
+        """Alias para _load_products compatible con la interfaz común."""
         self._load_products()
 
     def _build_ui(self):

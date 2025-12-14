@@ -41,9 +41,10 @@ class MoneySpinBox(QDoubleSpinBox):
 class SaleDialog(QDialog):
     """Diálogo de Nueva Venta con formato de factura y campos decimales (2 cifras)."""
 
-    def __init__(self, parent=None, session_factory: sessionmaker | None = None) -> None:
+    def __init__(self, parent=None, session_factory: sessionmaker | None = None, current_user: str | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Factura de Venta")
+        self._current_user_override = current_user
         # Tamaño inicial adaptado a la pantalla
         try:
             screen = QGuiApplication.primaryScreen()
@@ -2336,6 +2337,8 @@ class SaleDialog(QDialog):
             QMessageBox.critical(self, "Editar Corpóreo", f"Error abriendo el editor corpóreo:\n{e}")
 
     def _resolve_current_user(self) -> str | None:
+        if hasattr(self, '_current_user_override') and self._current_user_override:
+            return self._current_user_override
         return "admin"
 
     def _ensure_session_factory(self) -> sessionmaker | None:

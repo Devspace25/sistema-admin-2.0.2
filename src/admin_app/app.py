@@ -26,6 +26,7 @@ from .ui.sales_view import SalesView
 from .ui.daily_reports_view import DailyReportsView
 from .ui.config_view import ConfigView
 from .ui.simple_products_view import SimpleProductsView
+from .ui.workers_view import WorkersView
 ## Módulo ParametrosMaterialesView eliminado (consolidado en Productos)
 ## Módulo antiguo de producto eliminado
 ## Se eliminaron las siguientes importaciones:
@@ -69,7 +70,8 @@ class MainWindow(QMainWindow):
         self._daily_reports_view = DailyReportsView(self._session_factory, parent=self, current_user=self._current_user)
 
         # Importaciones locales para evitar ciclos y vistas adicionales
-        self._orders_view = OrdersView(self._session_factory)
+        self._orders_view = OrdersView(self._session_factory, current_user=self._current_user)
+        self._workers_view = WorkersView(self._session_factory)
         self._config_view = ConfigView(self._session_factory)
 
         self._stack.addWidget(self._home_view)           # 0
@@ -78,7 +80,8 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._sales_view)          # 3
         self._stack.addWidget(self._daily_reports_view)  # 4
         self._stack.addWidget(self._orders_view)         # 5
-        self._stack.addWidget(self._config_view)         # 6
+        self._stack.addWidget(self._workers_view)        # 6 (antes 6 era config)
+        self._stack.addWidget(self._config_view)         # 7
 
         self.setCentralWidget(container)
 
@@ -101,35 +104,20 @@ class MainWindow(QMainWindow):
             pass
         # Configurar permisos del usuario en el sidebar
         try:
-            from .repository import user_has_permission, user_has_role
+            from .repository import get_user_permissions, user_has_role
             user_permissions = set()
             # Buscar ID de usuario si está autenticado
             with self._session_factory() as s:
                 from .models import User
                 u = s.query(User).filter(User.username == self._current_user).first()
                 if u:
-                    # Si el usuario tiene rol "ADMIN", darle todos los permisos automáticamente
-                    is_admin = user_has_role(s, user_id=u.id, role_name="ADMIN")
-                    if is_admin:
-                        # Para admin, obtener todos los permisos disponibles de la base de datos
-                        from .models import Permission
-                        all_permissions = s.query(Permission).all()
-                        user_permissions.update([p.code for p in all_permissions])
-                    else:
-                        # Para otros roles, verificar permisos individuales
-                        # Lista de permisos que pueden ser relevantes para la interfaz
-                        all_perms = [
-                            "view_home", "view_customers", "edit_customers", "view_products", "edit_products",
-                            "view_sales", "edit_sales", "view_daily_reports", "view_orders", 
-                            "edit_orders", "view_parametros_materiales", "edit_parametros_materiales",
-                            "view_config", "edit_config"
-                        ]
-                        for perm in all_perms:
-                            if user_has_permission(s, user_id=u.id, permission_code=perm):
-                                user_permissions.add(perm)
+                    # Obtener permisos reales desde la base de datos
+                    perms = get_user_permissions(s, u.id)
+                    user_permissions.update(perms)
                     
-                    # Guardar estado de administrador
-                    self._is_admin = is_admin
+                    # Guardar estado de administrador (solo para referencia, no para bypass)
+                    self._is_admin = user_has_role(s, user_id=u.id, role_name="ADMIN")
+            
             # Configurar sidebar con los permisos
             if hasattr(self._sidebar, "configure_permissions"):
                 self._sidebar.configure_permissions(user_permissions)
@@ -137,6 +125,22 @@ class MainWindow(QMainWindow):
             # Mantener compatibilidad con código existente
             self._can_view_config = "view_config" in user_permissions
             self._user_permissions = user_permissions
+            
+            # Configurar permisos en vistas específicas
+            if hasattr(self._workers_view, "set_permissions"):
+                self._workers_view.set_permissions(user_permissions)
+            if hasattr(self._sales_view, "set_permissions"):
+                self._sales_view.set_permissions(user_permissions)
+            if hasattr(self._sales_view, "set_current_user"):
+                self._sales_view.set_current_user(self._current_user)
+            if hasattr(self._customers_view, "set_permissions"):
+                self._customers_view.set_permissions(user_permissions)
+            if hasattr(self._products_view, "set_permissions"):
+                self._products_view.set_permissions(user_permissions)
+            if hasattr(self._orders_view, "set_permissions"):
+                self._orders_view.set_permissions(user_permissions)
+            if hasattr(self._daily_reports_view, "set_permissions"):
+                self._daily_reports_view.set_permissions(user_permissions)
             
         except Exception as e:
             # En caso de error, dejar visible por defecto para no bloquear navegación durante desarrollo
@@ -280,6 +284,7 @@ class MainWindow(QMainWindow):
             "ventas": "view_sales",
             "reportes_diarios": "view_daily_reports",
             "pedidos": "view_orders",
+            "trabajadores": "view_workers",
             "configuracion": "view_config",
         }
         
@@ -287,8 +292,8 @@ class MainWindow(QMainWindow):
         is_admin = getattr(self, "_is_admin", False)
         required_perm = module_permissions.get(module_key)
         
-        # Los administradores tienen acceso a todo, otros usuarios verifican permisos
-        if not is_admin and required_perm and required_perm not in user_permissions:
+        # Verificar permisos (incluso para admin, para respetar configuración)
+        if required_perm and required_perm not in user_permissions:
             QMessageBox.warning(self, "Permisos", f"No tienes permiso para acceder a este módulo.")
             module_key = "home"
         
@@ -299,10 +304,26 @@ class MainWindow(QMainWindow):
             "ventas": 3,
             "reportes_diarios": 4,
             "pedidos": 5,
-            "configuracion": 6,
+            "trabajadores": 6,
+            "configuracion": 7,
         }
         self._stack.setCurrentIndex(index_map.get(module_key, 0))
-        # Las acciones específicas viven dentro de cada módulo
+        
+        # Refrescar vista si es necesario
+        if module_key == "clientes":
+            self._customers_view.refresh()
+        elif module_key == "productos":
+            self._products_view.refresh()
+        elif module_key == "ventas":
+            self._sales_view.refresh()
+        elif module_key == "reportes_diarios":
+            self._daily_reports_view.refresh()
+        elif module_key == "pedidos":
+            self._orders_view.refresh()
+        elif module_key == "trabajadores":
+            self._workers_view.refresh()
+        elif module_key == "configuracion":
+            self._config_view.refresh()
 
 
 def create_qt_app():

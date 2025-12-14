@@ -74,9 +74,10 @@ def test_can_delete_normal_user(admin_session):
     result = delete_user(session, user_id=normal_user.id)
     assert result is True
     
-    # Verificar que el usuario normal fue eliminado
+    # Verificar que el usuario normal fue marcado como inactivo (soft delete)
     normal_exists = session.get(User, normal_user.id)
-    assert normal_exists is None
+    assert normal_exists is not None
+    assert normal_exists.is_active is False
 
 
 def test_admin_user_protection_by_username(admin_session):
@@ -97,6 +98,7 @@ def test_admin_user_protection_by_username(admin_session):
     result = delete_user(session, user_id=similar_user.id)
     assert result is True
     
-    # Verificar que fue eliminado
+    # Verificar que fue marcado como inactivo
     similar_exists = session.get(User, similar_user.id)
-    assert similar_exists is None
+    assert similar_exists is not None
+    assert similar_exists.is_active is False

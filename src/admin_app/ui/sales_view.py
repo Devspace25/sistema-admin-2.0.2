@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy.orm import sessionmaker, joinedload
 import json
 
-from ..models import Sale
+from ..models import Sale, User
 from ..repository import (
     list_sales,
     add_sale,
@@ -21,6 +21,7 @@ from ..repository import (
     get_customer_by_id,
     add_corporeo_payload,
     add_corporeo_config,
+    user_has_role
 )
 from .sale_dialog import SaleDialog as InvoiceSaleDialog
 
@@ -29,7 +30,27 @@ class SalesView(QWidget):
     def __init__(self, session_factory: sessionmaker, parent=None):
         super().__init__(parent)
         self._session_factory = session_factory
+        self._current_user = None
+        self._can_edit = True
+        self._can_delete = True
         self._setup_ui()
+        self._load_sales()
+        
+    def set_current_user(self, username: str):
+        self._current_user = username
+
+    def set_permissions(self, permissions: set[str]):
+        """Configurar permisos de edición y eliminación."""
+        self._can_edit = "edit_sales" in permissions
+        self._can_create = "create_sales" in permissions
+        # Asumimos que eliminar requiere permiso de edición o uno específico si existiera
+        self._can_delete = "edit_sales" in permissions 
+        
+        self.btn_add.setVisible(self._can_create)
+        self._on_selection_changed()
+        
+    def refresh(self):
+        """Alias para _load_sales compatible con la interfaz común."""
         self._load_sales()
         
     def _setup_ui(self):
@@ -138,11 +159,25 @@ class SalesView(QWidget):
         self._status_label.setText("Cargando ventas...")
         try:
             with self._session_factory() as session:
-                # Cargar ventas con relaciones (items y payments) para visualización correcta
-                sales = session.query(Sale).options(
+                # Determine visibility
+                can_view_all = False
+                if self._current_user:
+                    user = session.query(User).filter(User.username == self._current_user).first()
+                    if user:
+                        is_admin = user_has_role(session, user_id=user.id, role_name="ADMIN")
+                        is_administracion = user_has_role(session, user_id=user.id, role_name="ADMINISTRACION")
+                        can_view_all = is_admin or is_administracion
+                
+                query = session.query(Sale).options(
                     joinedload(Sale.items),
                     joinedload(Sale.payments)
-                ).order_by(Sale.id.desc()).all()
+                )
+                
+                if not can_view_all and self._current_user:
+                    # Filter by current user (asesor)
+                    query = query.filter(Sale.asesor == self._current_user)
+                
+                sales = query.order_by(Sale.id.desc()).all()
             
                 self.table.setRowCount(len(sales))
                 
@@ -322,8 +357,8 @@ class SalesView(QWidget):
     def _on_selection_changed(self):
         """Habilitar/deshabilitar botones según la selección."""
         has_selection = len(self.table.selectedItems()) > 0
-        self.btn_edit.setEnabled(has_selection)
-        self.btn_delete.setEnabled(has_selection)
+        self.btn_edit.setEnabled(has_selection and self._can_edit)
+        self.btn_delete.setEnabled(has_selection and self._can_delete)
         
     def _get_selected_sale_id(self) -> int | None:
         """Obtener el ID de la venta seleccionada."""
@@ -334,7 +369,7 @@ class SalesView(QWidget):
         
     def _on_add_sale(self):
         """Abrir diálogo para agregar nueva venta con el nuevo formulario estilo factura."""
-        dialog = InvoiceSaleDialog(parent=self, session_factory=self._session_factory)
+        dialog = InvoiceSaleDialog(parent=self, session_factory=self._session_factory, current_user=self._current_user)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Mapear datos del nuevo diálogo hacia el repositorio
             try:

@@ -34,10 +34,6 @@ class UserDialog(QDialog):
         self.username_edit.setPlaceholderText("ej: jperez")
         form.addRow("Usuario:", self.username_edit)
         
-        self.fullname_edit = QLineEdit()
-        self.fullname_edit.setPlaceholderText("ej: Juan Pérez")
-        form.addRow("Nombre Completo:", self.fullname_edit)
-        
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.setPlaceholderText("Contraseña")
@@ -47,6 +43,12 @@ class UserDialog(QDialog):
         self.confirm_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm_password_edit.setPlaceholderText("Confirmar contraseña")
         form.addRow("Confirmar:", self.confirm_password_edit)
+        
+        # Selector de Trabajador
+        self.worker_combo = QComboBox()
+        self.worker_combo.addItem("-- Ninguno --", None)
+        self._load_workers()
+        form.addRow("Asignar a Trabajador:", self.worker_combo)
         
         # Roles disponibles
         roles_group = QGroupBox("Roles")
@@ -85,6 +87,21 @@ class UserDialog(QDialog):
         if self.is_editing:
             self._load_user_data()
     
+    def _load_workers(self):
+        """Cargar lista de trabajadores."""
+        try:
+            from ..repository import list_workers
+            with self.session_factory() as session:
+                workers = list_workers(session, active_only=True)
+                for w in workers:
+                    # Mostrar si ya tiene usuario
+                    text = w.full_name
+                    if w.user_id:
+                        text += " (Tiene usuario)"
+                    self.worker_combo.addItem(text, w.id)
+        except Exception as e:
+            print(f"Error cargando trabajadores: {e}")
+
     def _load_roles(self):
         """Cargar roles disponibles."""
         try:
@@ -108,7 +125,6 @@ class UserDialog(QDialog):
             return
             
         self.username_edit.setText(self.user_data.get('username', ''))
-        self.fullname_edit.setText(self.user_data.get('full_name', ''))
         
         # En edición, la contraseña es opcional
         self.password_edit.setPlaceholderText("Dejar vacío para mantener actual")
@@ -117,25 +133,33 @@ class UserDialog(QDialog):
         # Cargar roles del usuario
         try:
             from ..repository import get_user_roles
+            from ..models import Worker
             with self.session_factory() as session:
                 user_roles = get_user_roles(session, self.user_data['id'])
                 user_role_ids = [role.id for role in user_roles]
                 
                 for role_id, checkbox in self.role_checkboxes.items():
                     checkbox.setChecked(role_id in user_role_ids)
+                
+                # Cargar trabajador asignado
+                worker = session.query(Worker).filter(Worker.user_id == self.user_data['id']).first()
+                if worker:
+                    idx = self.worker_combo.findData(worker.id)
+                    if idx >= 0:
+                        self.worker_combo.setCurrentIndex(idx)
                     
         except Exception as e:
-            print(f"Error cargando roles del usuario: {e}")
+            print(f"Error cargando datos del usuario: {e}")
     
     def get_form_data(self):
         """Obtener datos del formulario."""
         return {
             'username': self.username_edit.text().strip(),
-            'full_name': self.fullname_edit.text().strip(),
             'password': self.password_edit.text().strip(),
             'confirm_password': self.confirm_password_edit.text().strip(),
             'active': self.active_checkbox.isChecked(),
-            'role_ids': [role_id for role_id, checkbox in self.role_checkboxes.items() if checkbox.isChecked()]
+            'role_ids': [role_id for role_id, checkbox in self.role_checkboxes.items() if checkbox.isChecked()],
+            'worker_id': self.worker_combo.currentData()
         }
     
     def validate_form(self):
@@ -146,10 +170,6 @@ class UserDialog(QDialog):
             QMessageBox.warning(self, "Error", "El nombre de usuario es requerido.")
             return False
             
-        if not data['full_name']:
-            QMessageBox.warning(self, "Error", "El nombre completo es requerido.")
-            return False
-        
         # Validar contraseña solo si no estamos editando o si se proporcionó una nueva
         if not self.is_editing or data['password']:
             if len(data['password']) < 4:
@@ -438,6 +458,16 @@ class ConfigView(QWidget):
         title.setStyleSheet("color: #333; margin: 10px; padding: 10px;")
         layout.addWidget(title)
         
+        self._setup_ui(layout)
+        
+    def refresh(self):
+        """Recargar datos de configuración."""
+        self._reload_users()
+        self._reload_roles()
+        self._reload_permissions()
+
+    def _setup_ui(self, layout):
+        
         # Pestañas
         self.tabs = QTabWidget(self)
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
@@ -693,18 +723,30 @@ class ConfigView(QWidget):
         if dialog.exec():
             data = dialog.get_form_data()
             try:
-                from ..repository import create_user, assign_user_roles
+                from ..repository import create_user, assign_user_roles, update_worker
+                from ..models import Worker
                 with self._session_factory() as session:
+                    # Determinar nombre completo desde el trabajador
+                    full_name = None
+                    if data['worker_id']:
+                        worker = session.get(Worker, data['worker_id'])
+                        if worker:
+                            full_name = worker.full_name
+                    
                     # Crear usuario
                     user = create_user(
                         session,
                         username=data['username'],
                         password=data['password'],
-                        full_name=data['full_name']
+                        full_name=full_name
                     )
                     
                     # Asignar roles
                     assign_user_roles(session, user.id, data['role_ids'])
+                    
+                    # Asignar trabajador si se seleccionó
+                    if data['worker_id']:
+                        update_worker(session, data['worker_id'], user_id=user.id)
                     
                     session.commit()
                     
@@ -733,12 +775,18 @@ class ConfigView(QWidget):
         if dialog.exec():
             form_data = dialog.get_form_data()
             try:
-                from ..repository import update_user, assign_user_roles
+                from ..repository import update_user, assign_user_roles, update_worker
+                from ..models import Worker
                 with self._session_factory() as session:
                     # Actualizar usuario
-                    update_data = {
-                        'full_name': form_data['full_name']
-                    }
+                    update_data = {}
+                    
+                    # Si hay trabajador seleccionado, actualizar nombre completo
+                    if form_data['worker_id']:
+                        worker = session.get(Worker, form_data['worker_id'])
+                        if worker:
+                            update_data['full_name'] = worker.full_name
+                    
                     if form_data['password']:  # Solo actualizar contraseña si se proporcionó
                         update_data['password'] = form_data['password']
                         
@@ -746,6 +794,16 @@ class ConfigView(QWidget):
                     
                     # Actualizar roles
                     assign_user_roles(session, user_data['id'], form_data['role_ids'])
+                    
+                    # Actualizar asignación de trabajador
+                    # 1. Desvincular cualquier trabajador que tenga este usuario
+                    current_workers = session.query(Worker).filter(Worker.user_id == user_data['id']).all()
+                    for w in current_workers:
+                        w.user_id = None
+                    
+                    # 2. Vincular nuevo trabajador si se seleccionó
+                    if form_data['worker_id']:
+                        update_worker(session, form_data['worker_id'], user_id=user_data['id'])
                     
                     session.commit()
                     
@@ -776,6 +834,7 @@ class ConfigView(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 from ..repository import delete_user
+                print(f"DEBUG: Calling delete_user for ID {data['ID']}")
                 with self._session_factory() as session:
                     delete_user(session, user_id=int(data['ID']))
                     session.commit()

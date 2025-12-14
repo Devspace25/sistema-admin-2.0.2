@@ -58,7 +58,22 @@ class CustomersView(QWidget):
         super().__init__(parent)
         self._session_factory = session_factory
         self._loader: _LoadCustomersThread | None = None
+        self._can_edit = True
+        self._can_delete = True
         self._setupUi()
+        self.reload_async()
+
+    def set_permissions(self, permissions: set[str]):
+        """Configurar permisos de edición y eliminación."""
+        self._can_edit = "edit_customers" in permissions
+        self._can_create = "create_customers" in permissions
+        self._can_delete = "edit_customers" in permissions # Asumimos mismo permiso por ahora
+        
+        self.btn_new.setVisible(self._can_create)
+        self._on_selection_changed()
+
+    def refresh(self):
+        """Alias para reload_async compatible con la interfaz común."""
         self.reload_async()
 
     def _setupUi(self) -> None:
@@ -293,6 +308,9 @@ class CustomersView(QWidget):
 
     def _on_edit(self) -> None:
         """Maneja la edición de un cliente existente."""
+        if not self._can_edit:
+            return
+            
         cid = self.selected_customer_id()
         if cid is None:
             QMessageBox.information(self, "Editar", "Selecciona un cliente primero")
@@ -378,8 +396,8 @@ class CustomersView(QWidget):
     def _on_selection_changed(self) -> None:
         """Actualiza el estado de los botones según la selección."""
         has_sel = self.selected_customer_id() is not None
-        self.btn_edit.setEnabled(has_sel)
-        self.btn_delete.setEnabled(has_sel)
+        self.btn_edit.setEnabled(has_sel and self._can_edit)
+        self.btn_delete.setEnabled(has_sel and self._can_delete)
 
     def selected_customer_id(self) -> int | None:
         """Obtiene el ID del cliente seleccionado actualmente."""

@@ -10,7 +10,11 @@ from sqlalchemy.orm import sessionmaker
 import json
 from pathlib import Path
 
-from ..repository import list_orders, get_order_by_id, update_order, delete_order_by_id, list_users, get_order_full
+from ..repository import (
+    list_orders, get_order_by_id, update_order, delete_order_by_id, 
+    list_users, get_order_full, user_has_role
+)
+from ..models import User
 from ..events import events
 from .order_details_dialog import OrderDetailsDialog
 
@@ -79,14 +83,15 @@ class OrderStatusWidget(QWidget):
 class _LoadOrdersThread(QThread):
     loaded = Signal(list)
 
-    def __init__(self, session_factory: sessionmaker, parent=None) -> None:
+    def __init__(self, session_factory: sessionmaker, filter_user: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._session_factory = session_factory
+        self.filter_user = filter_user
 
     def run(self) -> None:
         try:
             with self._session_factory() as session:
-                orders = list_orders(session)
+                orders = list_orders(session, filter_user=self.filter_user)
                 rows = []
                 for o in orders:
                     rows.append({
@@ -109,11 +114,14 @@ class _LoadOrdersThread(QThread):
             pass
 
 class OrdersView(QWidget):
-    def __init__(self, session_factory: sessionmaker, parent=None) -> None:
+    def __init__(self, session_factory: sessionmaker, current_user: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._session_factory = session_factory
+        self._current_user = current_user
         self._loading = False
         self._orders_data = [] # Store data for filtering
+        self._can_edit = True
+        self._can_delete = True
 
         # Layout
         layout = QVBoxLayout(self)
@@ -171,9 +179,26 @@ class OrdersView(QWidget):
         
         # Events
         try:
-            events.order_created.connect(lambda order_id: self.refresh())
+            # Usar una referencia débil o verificar isVisible/isValid antes de llamar
+            # Para simplificar, capturamos RuntimeError dentro de la lambda
+            def safe_refresh(oid):
+                try:
+                    if self.isVisible():
+                        self.refresh()
+                except RuntimeError:
+                    pass
+            events.order_created.connect(safe_refresh)
         except Exception:
             pass
+
+    def set_permissions(self, permissions: set[str]):
+        """Configurar permisos de edición y eliminación."""
+        self._can_edit = "edit_orders" in permissions
+        self._can_delete = "edit_orders" in permissions # Asumimos mismo permiso
+        
+        self.btn_delete.setVisible(self._can_delete)
+        # Refrescar tabla para actualizar widgets de estado y diseñador
+        self._apply_filter()
 
     def refresh(self) -> None:
         if self._loading:
@@ -182,7 +207,23 @@ class OrdersView(QWidget):
         self.btn_refresh.setEnabled(False)
         self._table.setRowCount(0)
         
-        self._thread = _LoadOrdersThread(self._session_factory, self)
+        filter_user = None
+        if self._current_user:
+            try:
+                with self._session_factory() as session:
+                    user = session.query(User).filter(User.username == self._current_user).first()
+                    if user:
+                        is_admin = user_has_role(session, user_id=user.id, role_name="ADMIN")
+                        is_administracion = user_has_role(session, user_id=user.id, role_name="ADMINISTRACION")
+                        is_designer = user_has_role(session, user_id=user.id, role_name="DISEÑADOR")
+                        is_taller = user_has_role(session, user_id=user.id, role_name="TALLER")
+                        
+                        if not (is_admin or is_administracion or is_designer or is_taller):
+                            filter_user = self._current_user
+            except Exception as e:
+                print(f"Error checking permissions in OrdersView: {e}")
+        
+        self._thread = _LoadOrdersThread(self._session_factory, filter_user=filter_user, parent=self)
         self._thread.loaded.connect(self._on_loaded)
         self._thread.finished.connect(self._on_finished)
         self._thread.start()
@@ -240,11 +281,13 @@ class OrdersView(QWidget):
                     btn_designer = QPushButton(f"👤 {row['designer_name']}")
                     btn_designer.setToolTip("Click para cambiar diseñador")
                     btn_designer.clicked.connect(lambda _, oid=row['id']: self._assign_designer(oid))
+                    btn_designer.setEnabled(self._can_edit)
                     self._table.setCellWidget(i, 3, btn_designer)
                 else:
                     btn_assign = QPushButton("➕ Asignar")
                     btn_assign.setStyleSheet("background-color: #ff9800; color: white; font-weight: bold;")
                     btn_assign.clicked.connect(lambda _, oid=row['id']: self._assign_designer(oid))
+                    btn_assign.setEnabled(self._can_edit)
                     self._table.setCellWidget(i, 3, btn_assign)
             else:
                 item_na = QTableWidgetItem("N/A")
@@ -253,6 +296,7 @@ class OrdersView(QWidget):
             
             # Status (Widget with Progress)
             status_widget = OrderStatusWidget(row['status'], row['id'], self._update_status)
+            status_widget.combo.setEnabled(self._can_edit)
             self._table.setCellWidget(i, 4, status_widget)
             
             # Product

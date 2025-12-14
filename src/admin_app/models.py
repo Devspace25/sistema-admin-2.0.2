@@ -38,6 +38,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     default_role_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("roles.id"))
+    monthly_goal: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -98,6 +99,45 @@ class Customer(Base):
     last_name: Mapped[str | None] = mapped_column(String(120))
     document: Mapped[str | None] = mapped_column(String(50))  # C.I./Rif.
     short_address: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(50))
+    email: Mapped[str | None] = mapped_column(String(200))
+
+
+class Worker(Base):
+    __tablename__ = "workers"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Optional link to a system user if they have login access
+    user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Extended fields (mapping to existing legacy columns where possible)
+    cedula: Mapped[str | None] = mapped_column(String(20))
+    phone: Mapped[str | None] = mapped_column(String(50), name="telefono")
+    email: Mapped[str | None] = mapped_column(String(200))
+    address: Mapped[str | None] = mapped_column(Text, name="direccion")
+    job_title: Mapped[str | None] = mapped_column(String(100), name="rol") # 'rol' in DB
+    start_date: Mapped[datetime | None] = mapped_column(DateTime, name="fecha_ingreso")
+    salary: Mapped[float | None] = mapped_column(Float, name="salario")
+    
+    # Legacy required columns
+    first_name: Mapped[str | None] = mapped_column(String(100))
+    last_name: Mapped[str | None] = mapped_column(String(100))
+
+
+class WorkerGoal(Base):
+    __tablename__ = "worker_goals"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    worker_id: Mapped[int] = mapped_column(Integer, ForeignKey("workers.id"), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
     phone: Mapped[str | None] = mapped_column(String(50))
     email: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -70,6 +70,22 @@ class OrderDetailsDialog(QDialog):
         self.lbl_product.setReadOnly(True)
         form_product.addRow("Producto:", self.lbl_product)
         
+        # Extras (Diseño / Instalación)
+        if self.order.sale:
+            diseno = self.order.sale.diseno_usd or 0.0
+            # En SaleDialog, 'ingresos_usd' se usa para mapear el costo de Instalación
+            instalacion = self.order.sale.ingresos_usd or 0.0
+            
+            if diseno > 0:
+                self.lbl_diseno = QLineEdit(f"{diseno:.2f}")
+                self.lbl_diseno.setReadOnly(True)
+                form_product.addRow("Diseño ($):", self.lbl_diseno)
+                
+            if instalacion > 0:
+                self.lbl_inst = QLineEdit(f"{instalacion:.2f}")
+                self.lbl_inst.setReadOnly(True)
+                form_product.addRow("Instalación ($):", self.lbl_inst)
+        
         desc_text = self.details.get('descripcion_text', '')
         if desc_text:
             self.txt_desc = QTextEdit()

@@ -94,6 +94,7 @@ from .models import (
     Base, Customer, Sale, SaleItem, SalePayment,
     Order, OrderSequence,
     User, Role, Permission, UserRole, RolePermission,
+    Worker, WorkerGoal,
     SystemConfig,
     CorporeoConfig, CorporeoPayload,
     # EAV
@@ -245,9 +246,14 @@ def delete_user(session: Session, *, user_id: int) -> bool:
     if u.username == "admin":
         raise ValueError("No se puede eliminar al usuario administrador del sistema")
     
-    # eliminar asignaciones
-    session.query(UserRole).filter(UserRole.user_id == user_id).delete()
-    session.delete(u)
+    # Soft delete: marcar como inactivo para evitar errores de FK (ej. orders)
+    print(f"DEBUG: Soft deleting user {user_id}")
+    u.is_active = False
+    
+    # No eliminamos roles ni el registro físico para mantener integridad referencial
+    # session.query(UserRole).filter(UserRole.user_id == user_id).delete()
+    # session.delete(u)
+    
     session.commit()
     return True
 
@@ -342,9 +348,11 @@ def init_db(engine, seed: bool = True) -> None:
     # Migración: agregar default_role_id a users
     if insp.has_table('users'):
         users_cols = {c['name'] for c in insp.get_columns('users')}
-        if 'default_role_id' not in users_cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if 'default_role_id' not in users_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN default_role_id INTEGER REFERENCES roles(id)"))
+            if 'monthly_goal' not in users_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN monthly_goal FLOAT DEFAULT 0.0"))
                 
     # Migración: agregar order_number a orders y crear tabla order_sequences
     if insp.has_table('orders'):
@@ -367,6 +375,22 @@ def init_db(engine, seed: bool = True) -> None:
                     UPDATE orders 
                     SET order_number = 'ORD-' || strftime('%Y', created_at) || '-' || printf('%03d', id)
                     WHERE order_number IS NULL
+    
+    # Migración: workers (asegurar full_name y user_id)
+    if insp.has_table('workers'):
+        w_cols = {c['name'] for c in insp.get_columns('workers')}
+        with engine.begin() as conn:
+            if 'full_name' not in w_cols:
+                conn.execute(text("ALTER TABLE workers ADD COLUMN full_name VARCHAR(200)"))
+                # Intentar poblar full_name desde first_name + last_name si existen
+                if 'first_name' in w_cols and 'last_name' in w_cols:
+                    conn.execute(text("UPDATE workers SET full_name = TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))"))
+                # Si no, usar name si existe
+                elif 'name' in w_cols:
+                    conn.execute(text("UPDATE workers SET full_name = name"))
+                
+            if 'user_id' not in w_cols:
+                conn.execute(text("ALTER TABLE workers ADD COLUMN user_id INTEGER REFERENCES users(id)"))
                 """))
     # Asegurar tabla orders
     if not insp.has_table('orders'):
@@ -428,6 +452,9 @@ def init_db(engine, seed: bool = True) -> None:
             ("view_reports", "Ver reportes"),
             # Módulo Reportes Diarios
             ("view_daily_reports", "Ver reportes diarios"),
+            # Módulo Trabajadores
+            ("view_workers", "Ver trabajadores"),
+            ("edit_workers", "Editar trabajadores"),
             # Módulo Parámetros y Materiales
             ("view_parametros_materiales", "Ver parámetros y materiales"),
             ("edit_parametros_materiales", "Editar parámetros y materiales"),
@@ -448,35 +475,36 @@ def init_db(engine, seed: bool = True) -> None:
         
         # Vincular permisos para el rol ADMINISTRACION (similar a ADMIN pero sin configuración)
         if administracion_role:
-            administracion_perms = [
-                "view_home", "view_customers", "edit_customers",
-                "view_products", "edit_products", "view_sales", "edit_sales",
-                "view_orders", "edit_orders", "view_reports", "view_daily_reports",
-                "view_parametros_materiales", "edit_parametros_materiales"
-            ]
-            for perm_code in administracion_perms:
-                perm = session.query(Permission).filter(Permission.code == perm_code).first()
-                if perm:
-                    exists = session.query(RolePermission).filter(
-                        RolePermission.role_id == administracion_role.id, RolePermission.permission_id == perm.id
-                    ).first()
-                    if not exists:
+            # Solo asignar permisos por defecto si el rol no tiene ningún permiso asignado
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == administracion_role.id).count()
+            
+            if existing_perms_count == 0:
+                administracion_perms = [
+                    "view_home", "view_customers", "edit_customers",
+                    "view_products", "edit_products", "view_sales", "edit_sales",
+                    "view_orders", "edit_orders", "view_reports", "view_daily_reports",
+                    "view_parametros_materiales", "edit_parametros_materiales"
+                ]
+                for perm_code in administracion_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
                         session.add(RolePermission(role_id=administracion_role.id, permission_id=perm.id))
         
         # Vincular permisos específicos al rol VENDEDOR
         if vendedor_role:
-            vendedor_perms = [
-                "view_home", "view_customers", "edit_customers",
-                "view_products", "edit_products", "view_sales", "edit_sales", 
-                "view_orders", "edit_orders"
-            ]
-            for perm_code in vendedor_perms:
-                perm = session.query(Permission).filter(Permission.code == perm_code).first()
-                if perm:
-                    exists = session.query(RolePermission).filter(
-                        RolePermission.role_id == vendedor_role.id, RolePermission.permission_id == perm.id
-                    ).first()
-                    if not exists:
+            # Solo asignar permisos por defecto si el rol no tiene ningún permiso asignado (recién creado)
+            # Esto permite que el usuario personalice el rol sin que se sobrescriba al reiniciar
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == vendedor_role.id).count()
+            
+            if existing_perms_count == 0:
+                vendedor_perms = [
+                    "view_home", "view_customers", "edit_customers",
+                    "view_products", "edit_products", "view_sales", "edit_sales", 
+                    "view_orders", "edit_orders"
+                ]
+                for perm_code in vendedor_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
                         session.add(RolePermission(role_id=vendedor_role.id, permission_id=perm.id))
         
         session.commit()
@@ -1478,8 +1506,14 @@ def reserve_draft_order(session: Session, *, sale_id: int | None = None, product
     session.refresh(obj)
     return obj
 
-def list_orders(session: Session) -> list[Order]:
-    return session.query(Order).options(joinedload(Order.sale), joinedload(Order.designer)).order_by(Order.id.desc()).all()
+def list_orders(session: Session, filter_user: Optional[str] = None) -> list[Order]:
+    from .models import Sale
+    query = session.query(Order).options(joinedload(Order.sale), joinedload(Order.designer))
+    
+    if filter_user:
+        query = query.join(Order.sale).filter(Sale.asesor == filter_user)
+        
+    return query.order_by(Order.id.desc()).all()
 
 def get_order_by_id(session: Session, order_id: int) -> Order | None:
     return session.get(Order, order_id)
@@ -1892,14 +1926,23 @@ def set_monthly_sales_goal(session: Session, goal: float) -> None:
         "Meta mensual de ventas en USD"
     )
 
+def set_user_monthly_goal(session: Session, username: str, goal: float) -> None:
+    """Establecer la meta mensual para un usuario específico."""
+    from .models import User
+    user = session.query(User).filter(User.username == username).first()
+    if user:
+        user.monthly_goal = goal
+        session.commit()
+
 
 # --- Funciones de Estadísticas de Ventas ---
 
-def get_sales_by_user(session: Session, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> list[dict]:
-    """Obtener ventas agrupadas por usuario/asesor."""
-    from .models import Sale
+def get_sales_by_user(session: Session, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, filter_user: Optional[str] = None) -> list[dict]:
+    """Obtener ventas agrupadas por usuario/asesor (incluyendo usuarios sin ventas)."""
+    from .models import Sale, User
     from datetime import datetime, date
     import calendar
+    from sqlalchemy import func
     
     # Si no se especifica rango, usar mes actual
     if not start_date or not end_date:
@@ -1909,28 +1952,91 @@ def get_sales_by_user(session: Session, start_date: Optional[datetime] = None, e
         last_day = calendar.monthrange(today.year, today.month)[1]
         end_date = datetime(today.year, today.month, last_day, 23, 59, 59)
     
-    # Consulta agrupada por asesor
-    from sqlalchemy import func
-    results = session.query(
+    # 1. Subquery: Ventas agrupadas por asesor en el rango
+    sales_sub = session.query(
         Sale.asesor,
         func.sum(Sale.venta_usd).label('total_sales'),
         func.count(Sale.id).label('sales_count')
     ).filter(
         Sale.fecha >= start_date,
         Sale.fecha <= end_date
-    ).group_by(Sale.asesor).all()
+    ).group_by(Sale.asesor).subquery()
+
+    # 2. Query principal: Usuarios activos + sus ventas (Left Join)
+    query = session.query(
+        User.username,
+        User.monthly_goal,
+        func.coalesce(sales_sub.c.total_sales, 0.0).label('total_sales'),
+        func.coalesce(sales_sub.c.sales_count, 0).label('sales_count')
+    ).outerjoin(
+        sales_sub, User.username == sales_sub.c.asesor
+    ).filter(
+        User.is_active == True
+    )
+
+    if filter_user:
+        query = query.filter(User.username == filter_user)
+
+    results = query.all()
     
     return [
         {
-            'asesor': result.asesor,
-            'total_sales': float(result.total_sales or 0),
-            'sales_count': result.sales_count or 0
+            'asesor': row.username,
+            'total_sales': float(row.total_sales),
+            'sales_count': int(row.sales_count),
+            'monthly_goal': float(row.monthly_goal or 0.0)
         }
-        for result in results
+        for row in results
     ]
 
 
-def get_weekly_sales_data(session: Session, weeks_back: int = 4) -> dict:
+def get_daily_sales_data(session: Session, days_back: int = 7, filter_user: Optional[str] = None) -> dict:
+    """Obtener datos de ventas por día para gráficos."""
+    from .models import Sale
+    from datetime import datetime, date, timedelta
+    
+    today = date.today()
+    start_date = datetime.combine(today - timedelta(days=days_back - 1), datetime.min.time())
+    end_date = datetime.combine(today, datetime.max.time())
+    
+    # Obtener ventas en el rango
+    query = session.query(Sale).filter(
+        Sale.fecha >= start_date,
+        Sale.fecha <= end_date
+    )
+    
+    if filter_user:
+        query = query.filter(Sale.asesor == filter_user)
+        
+    sales = query.all()
+    
+    # Inicializar diccionario con todos los días en el rango
+    daily_data = {}
+    for i in range(days_back):
+        day = today - timedelta(days=days_back - 1 - i)
+        day_key = day.strftime("%Y-%m-%d")
+        daily_data[day_key] = {
+            'date': day,
+            'total_sales': 0.0,
+            'sales_count': 0
+        }
+
+    # Agrupar ventas
+    for sale in sales:
+        day_key = sale.fecha.strftime("%Y-%m-%d")
+        if day_key in daily_data:
+            daily_data[day_key]['total_sales'] += (sale.venta_usd or 0.0)
+            daily_data[day_key]['sales_count'] += 1
+            
+    # Convertir a lista ordenada
+    result_list = sorted(daily_data.values(), key=lambda x: x['date'])
+    
+    return {
+        'daily_data': result_list
+    }
+
+
+def get_weekly_sales_data(session: Session, weeks_back: int = 4, filter_user: Optional[str] = None) -> dict:
     """Obtener datos de ventas por semana para gráficos."""
     from .models import Sale
     from datetime import datetime, date, timedelta
@@ -1941,10 +2047,15 @@ def get_weekly_sales_data(session: Session, weeks_back: int = 4) -> dict:
     end_date = datetime.combine(today, datetime.max.time())
     
     # Obtener ventas en el rango
-    sales = session.query(Sale).filter(
+    query = session.query(Sale).filter(
         Sale.fecha >= start_date,
         Sale.fecha <= end_date
-    ).all()
+    )
+    
+    if filter_user:
+        query = query.filter(Sale.asesor == filter_user)
+        
+    sales = query.all()
     
     # Agrupar por semana
     weekly_data = {}
@@ -1969,7 +2080,7 @@ def get_weekly_sales_data(session: Session, weeks_back: int = 4) -> dict:
     }
 
 
-def get_dashboard_kpis(session: Session) -> dict:
+def get_dashboard_kpis(session: Session, filter_user: Optional[str] = None) -> dict:
     """Obtener KPIs para el dashboard principal."""
     from .models import Sale, Customer
     from datetime import datetime, date
@@ -1983,22 +2094,31 @@ def get_dashboard_kpis(session: Session) -> dict:
     
     # Ventas del mes
     from sqlalchemy import func
-    monthly_sales = session.query(func.sum(Sale.venta_usd)).filter(
+    q_monthly = session.query(func.sum(Sale.venta_usd)).filter(
         Sale.fecha >= month_start
-    ).scalar() or 0
+    )
     
     # Total pedidos del mes
-    monthly_orders = session.query(Sale).filter(
+    q_orders = session.query(Sale).filter(
         Sale.fecha >= month_start
-    ).count()
+    )
     
     # Ventas de hoy
     today_start = datetime.combine(today, datetime.min.time())
     today_end = datetime.combine(today, datetime.max.time())
-    today_sales = session.query(func.sum(Sale.venta_usd)).filter(
+    q_today = session.query(func.sum(Sale.venta_usd)).filter(
         Sale.fecha >= today_start,
         Sale.fecha <= today_end
-    ).scalar() or 0
+    )
+
+    if filter_user:
+        q_monthly = q_monthly.filter(Sale.asesor == filter_user)
+        q_orders = q_orders.filter(Sale.asesor == filter_user)
+        q_today = q_today.filter(Sale.asesor == filter_user)
+    
+    monthly_sales = q_monthly.scalar() or 0
+    monthly_orders = q_orders.count()
+    today_sales = q_today.scalar() or 0
     
     return {
         'total_customers': total_customers,
@@ -2051,6 +2171,20 @@ def get_role_permissions(session: Session, role_id: int) -> list[Permission]:
     )
 
 
+def get_user_permissions(session: Session, user_id: int) -> list[str]:
+    """Obtener todos los códigos de permisos asignados a un usuario a través de sus roles."""
+    permissions = (
+        session.query(Permission.code)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(Role, Role.id == RolePermission.role_id)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .filter(UserRole.user_id == user_id)
+        .distinct()
+        .all()
+    )
+    return [p[0] for p in permissions]
+
+
 def assign_user_roles(session: Session, user_id: int, role_ids: list[int]) -> None:
     """Asignar roles a un usuario (reemplaza roles existentes)."""
     # Eliminar roles actuales
@@ -2088,12 +2222,8 @@ def list_permissions(session: Session) -> list[Permission]:
 def get_users_with_roles(session: Session) -> list[dict]:
     """Obtener usuarios con sus roles como texto."""
     users_data = []
-    # Por defecto solo mostrar el administrador en listados de configuración para reducir ruido.
-    # Si se requieren más usuarios, la UI permite añadirlos explícitamente.
-    users = session.query(User).filter(User.username == 'admin').order_by(User.username).all()
-    # fallback: si no existe admin (caso inusual), devolver todos
-    if not users:
-        users = session.query(User).order_by(User.username).all()
+    # Mostrar todos los usuarios ordenados por nombre de usuario
+    users = session.query(User).order_by(User.username).all()
     
     for user in users:
         roles = get_user_roles(session, user.id)
@@ -2797,3 +2927,116 @@ def delete_parameter_table_row(session: Session, row_id: int):
         raise ValueError(f"Fila con ID {row_id} no encontrada")
     
     value.is_active = False
+
+# --- Workers Management ---
+
+def list_workers(session: Session, active_only: bool = True, search_query: str | None = None) -> list[Worker]:
+    query = session.query(Worker)
+    if active_only:
+        query = query.filter(Worker.is_active == True)
+    
+    if search_query:
+        search = f"%{search_query}%"
+        query = query.filter(
+            (Worker.full_name.ilike(search)) |
+            (Worker.cedula.ilike(search)) |
+            (Worker.job_title.ilike(search))
+        )
+        
+    return query.order_by(Worker.full_name).all()
+
+def get_worker(session: Session, worker_id: int) -> Worker | None:
+    return session.get(Worker, worker_id)
+
+def create_worker(session: Session, full_name: str, user_id: int | None = None, 
+                  cedula: str | None = None, phone: str | None = None, email: str | None = None,
+                  address: str | None = None, job_title: str | None = None, 
+                  start_date: datetime | None = None, salary: float | None = None) -> Worker:
+    
+    # Split full_name into first and last name for legacy support
+    parts = full_name.strip().split(' ', 1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+    
+    worker = Worker(
+        full_name=full_name, 
+        first_name=first_name,
+        last_name=last_name,
+        user_id=user_id,
+        cedula=cedula,
+        phone=phone,
+        email=email,
+        address=address,
+        job_title=job_title,
+        start_date=start_date,
+        salary=salary
+    )
+    session.add(worker)
+    session.commit()
+    session.refresh(worker)
+    return worker
+
+def update_worker(session: Session, worker_id: int, full_name: str | None = None, user_id: int | None = None, is_active: bool | None = None,
+                  cedula: str | None = None, phone: str | None = None, email: str | None = None,
+                  address: str | None = None, job_title: str | None = None, 
+                  start_date: datetime | None = None, salary: float | None = None) -> Worker | None:
+    worker = session.get(Worker, worker_id)
+    if not worker:
+        return None
+    
+    if full_name is not None:
+        worker.full_name = full_name
+        # Update legacy fields
+        parts = full_name.strip().split(' ', 1)
+        worker.first_name = parts[0]
+        worker.last_name = parts[1] if len(parts) > 1 else ""
+        
+    if user_id is not None:
+        worker.user_id = user_id
+    if is_active is not None:
+        worker.is_active = is_active
+    
+    # Extended fields
+    if cedula is not None:
+        worker.cedula = cedula
+    if phone is not None:
+        worker.phone = phone
+    if email is not None:
+        worker.email = email
+    if address is not None:
+        worker.address = address
+    if job_title is not None:
+        worker.job_title = job_title
+    if start_date is not None:
+        worker.start_date = start_date
+    if salary is not None:
+        worker.salary = salary
+        
+    session.commit()
+    session.refresh(worker)
+    return worker
+
+def get_worker_goal(session: Session, worker_id: int, year: int, month: int) -> WorkerGoal | None:
+    return session.query(WorkerGoal).filter(
+        WorkerGoal.worker_id == worker_id,
+        WorkerGoal.year == year,
+        WorkerGoal.month == month
+    ).first()
+
+def set_worker_goal(session: Session, worker_id: int, year: int, month: int, target_amount: float) -> WorkerGoal:
+    goal = get_worker_goal(session, worker_id, year, month)
+    if goal:
+        goal.target_amount = target_amount
+    else:
+        goal = WorkerGoal(worker_id=worker_id, year=year, month=month, target_amount=target_amount)
+        session.add(goal)
+    
+    session.commit()
+    session.refresh(goal)
+    return goal
+
+def get_worker_goals_by_year(session: Session, worker_id: int, year: int) -> list[WorkerGoal]:
+    return session.query(WorkerGoal).filter(
+        WorkerGoal.worker_id == worker_id,
+        WorkerGoal.year == year
+    ).order_by(WorkerGoal.month).all()

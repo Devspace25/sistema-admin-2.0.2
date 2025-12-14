@@ -1403,7 +1403,10 @@ class CorporeoDialog(QDialog):
             if mat.get('label'):
                 mat_part = f"Material: {mat.get('label')}"
                 if esp.get('label'):
-                    mat_part += f" Espesor: {esp.get('label')}"
+                    esp_label = str(esp.get('label'))
+                    if 'mm' not in esp_label.lower():
+                        esp_label = f"{esp_label}mm"
+                    mat_part += f" Espesor: {esp_label}"
                 parts.append(mat_part)
 
             # base color
@@ -1443,7 +1446,10 @@ class CorporeoDialog(QDialog):
             # regulador
             reg = payload.get('regulador') or {}
             if reg.get('label') or reg.get('qty'):
-                parts.append(f"Reg: {reg.get('label', '')} x{int(reg.get('qty',0))}")
+                reg_label = str(reg.get('label', ''))
+                if reg_label and 'amp' not in reg_label.lower():
+                    reg_label = f"{reg_label}amp"
+                parts.append(f"Reg: {reg_label} x{int(reg.get('qty',0))}")
 
             # caja
             caja = payload.get('caja') or {}
@@ -3854,6 +3860,8 @@ class CorporeoDialog(QDialog):
             t = self.cbo_espesor.currentText()
             if t and not t.startswith('--'):
                 esp = t
+                if esp and 'mm' not in esp.lower():
+                    esp += 'mm'
         if mat or esp:
             parts.append(f"{mat} {esp}".strip())
 
@@ -3927,6 +3935,8 @@ class CorporeoDialog(QDialog):
                 if hasattr(self, 'cbo_reg_amp'):
                     reg = self.cbo_reg_amp.currentText()
                     if reg and not reg.startswith('--'):
+                        if 'amp' not in reg.lower():
+                            reg += 'amp'
                         qty_reg = 0
                         if hasattr(self, 'spin_reg_cant'):
                             qty_reg = int(self.spin_reg_cant.value())

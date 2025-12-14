@@ -30,8 +30,22 @@ class DailyReportsView(QWidget):
         self._session_factory = session_factory
         self._current_user = current_user or "—"
         self._can_view_all_sales = self._check_can_view_all_sales()
+        self._can_edit = True # Default, updated by set_permissions
         self.setWindowTitle("Reportes Diarios")
         self._setup_ui()
+        self._load_data()
+
+    def set_permissions(self, permissions: set[str]):
+        """Configurar permisos."""
+        # Por ahora solo usamos esto para habilitar/deshabilitar generación
+        # Podríamos tener un permiso específico 'create_daily_reports'
+        self._can_edit = "view_daily_reports" in permissions 
+        
+        self.btn_generate_today.setVisible(self._can_edit)
+        self.btn_generate_custom.setVisible(self._can_edit)
+
+    def refresh(self):
+        """Alias para _load_data compatible con la interfaz común."""
         self._load_data()
 
     def _setup_ui(self):

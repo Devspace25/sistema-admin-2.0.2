@@ -36,6 +36,7 @@ class SidebarNav(QWidget):
             "ventas": "assets/icons/cart.svg",
             "reportes_diarios": "assets/icons/chart.svg",
             "pedidos": "assets/icons/clipboard.svg",
+            "trabajadores": "assets/icons/users.svg",
             "configuracion": "assets/icons/lock.svg",
         }
         for key, text in [
@@ -45,6 +46,7 @@ class SidebarNav(QWidget):
             ("ventas", "Ventas"),
             ("reportes_diarios", "Reportes Diarios"),
             ("pedidos", "Pedidos"),
+            ("trabajadores", "Trabajadores"),
             ("configuracion", "Configuración"),
         ]:
             btn = QPushButton(text, self)
@@ -130,6 +132,7 @@ class SidebarNav(QWidget):
             "reportes": "view_reports",
             "reportes_diarios": "view_daily_reports",
             "pedidos": "view_orders",
+            "trabajadores": "view_workers",
             "configuracion": "view_config",
         }
         
