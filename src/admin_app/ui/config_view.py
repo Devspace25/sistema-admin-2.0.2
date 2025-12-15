@@ -285,14 +285,59 @@ class EnhancedListTab(QWidget):
         super().__init__(parent)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
-        # Título y barra de herramientas
-        if title:
-            title_label = QLabel(title)
-            title_label.setFont(QFont("", 12, QFont.Weight.Bold))
-            title_label.setStyleSheet("color: #333; margin-bottom: 10px;")
-            layout.addWidget(title_label)
+        # Top Bar (Search Left, Buttons Right)
+        top_bar = QHBoxLayout()
+        
+        # Search
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(10)
+        
+        lbl_search = QLabel("Buscar:")
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(f"🔍 Buscar en {title.lower()}...")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._filter_table)
+        
+        search_layout.addWidget(lbl_search)
+        search_layout.addWidget(self.search_edit)
+        
+        top_bar.addWidget(search_container, 1)
+
+        # Botones de acción
+        self.btn_add = QPushButton("➕ Agregar")
+        self.btn_edit = QPushButton("✏️ Editar") 
+        self.btn_del = QPushButton("🗑️ Eliminar")
+        self.btn_refresh = QPushButton("🔄 Actualizar")
+        
+        # Estilo unificado de botones
+        button_style = """
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: #2c3e50;
+            }
+            QPushButton:hover {
+                background-color: #eef2f7;
+            }
+            QPushButton:disabled {
+                background-color: #f0f0f0;
+                color: #bdc3c7;
+            }
+        """
+        
+        for btn in [self.btn_add, self.btn_edit, self.btn_del, self.btn_refresh]:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(button_style)
+            top_bar.addWidget(btn)
+            
+        layout.addLayout(top_bar)
         
         # Tabla
         self.table = QTableWidget(0, len(headers), self)
@@ -311,110 +356,6 @@ class EnhancedListTab(QWidget):
         
         layout.addWidget(self.table)
         
-        # Barra de botones
-        button_layout = QHBoxLayout()
-        
-        self.btn_add = QPushButton("➕ Agregar")
-        self.btn_edit = QPushButton("✏️ Editar") 
-        self.btn_del = QPushButton("🗑️ Eliminar")
-        self.btn_refresh = QPushButton("🔄 Actualizar")
-        
-        # Estilos de botones mejorados para mayor legibilidad
-        button_style = """
-            QPushButton {
-                padding: 10px 16px;
-                margin: 3px;
-                border: 2px solid #007bff;
-                border-radius: 6px;
-                background-color: #ffffff;
-                color: #007bff;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #007bff;
-                color: #ffffff;
-                border-color: #0056b3;
-            }
-            QPushButton:pressed {
-                background-color: #0056b3;
-                border-color: #004085;
-            }
-            QPushButton:disabled {
-                background-color: #f8f9fa;
-                color: #6c757d;
-                border-color: #dee2e6;
-            }
-        """
-        
-        # Estilo para botón de agregar (verde)
-        add_style = """
-            QPushButton {
-                padding: 10px 16px;
-                margin: 3px;
-                border: 2px solid #28a745;
-                border-radius: 6px;
-                background-color: #ffffff;
-                color: #28a745;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #28a745;
-                color: #ffffff;
-                border-color: #1e7e34;
-            }
-            QPushButton:pressed {
-                background-color: #1e7e34;
-                border-color: #155724;
-            }
-        """
-        
-        # Estilo para botón de eliminar (rojo)
-        del_style = """
-            QPushButton {
-                padding: 10px 16px;
-                margin: 3px;
-                border: 2px solid #dc3545;
-                border-radius: 6px;
-                background-color: #ffffff;
-                color: #dc3545;
-                font-weight: bold;
-                font-size: 13px;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #dc3545;
-                color: #ffffff;
-                border-color: #c82333;
-            }
-            QPushButton:pressed {
-                background-color: #c82333;
-                border-color: #bd2130;
-            }
-            QPushButton:disabled {
-                background-color: #f8f9fa;
-                color: #6c757d;
-                border-color: #dee2e6;
-            }
-        """
-        
-        # Aplicar estilos específicos
-        self.btn_add.setStyleSheet(add_style)
-        self.btn_edit.setStyleSheet(button_style) 
-        self.btn_del.setStyleSheet(del_style)
-        self.btn_refresh.setStyleSheet(button_style)
-        
-        button_layout.addWidget(self.btn_add)
-        button_layout.addWidget(self.btn_edit)
-        button_layout.addWidget(self.btn_del)
-        button_layout.addWidget(self.btn_refresh)
-        button_layout.addStretch()
-        
-        layout.addLayout(button_layout)
-        
         # Estado inicial de botones
         self.btn_edit.setEnabled(False)
         self.btn_del.setEnabled(False)
@@ -428,6 +369,18 @@ class EnhancedListTab(QWidget):
         self.btn_edit.setEnabled(has_selection)
         self.btn_del.setEnabled(has_selection)
     
+    def _filter_table(self, text):
+        """Filtrar filas de la tabla según el texto."""
+        text = text.lower()
+        for row in range(self.table.rowCount()):
+            match = False
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item and text in item.text().lower():
+                    match = True
+                    break
+            self.table.setRowHidden(row, not match)
+
     def get_selected_row_data(self):
         """Obtener datos de la fila seleccionada."""
         row = self.table.currentRow()
@@ -455,7 +408,7 @@ class ConfigView(QWidget):
         # Título principal
         title = QLabel("⚙️ Configuración del Sistema")
         title.setFont(QFont("", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #333; margin: 10px; padding: 10px;")
+        title.setStyleSheet("margin: 10px; padding: 10px;")
         layout.addWidget(title)
         
         self._setup_ui(layout)
@@ -512,49 +465,114 @@ class ConfigView(QWidget):
         """Crear pestaña de configuración del sistema."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
         
         # Título
         title = QLabel("Configuración General del Sistema")
-        title.setFont(QFont("", 12, QFont.Weight.Bold))
+        title.setFont(QFont("", 16, QFont.Weight.Bold))
+        title.setStyleSheet("margin-bottom: 10px;")
         layout.addWidget(title)
         
-        # Configuraciones
-        config_group = QGroupBox("Parámetros del Sistema")
-        config_layout = QFormLayout(config_group)
+        # Contenedor principal
+        form_container = QWidget()
+        form_layout = QFormLayout(form_container)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(15)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         
+        # Estilo para inputs
+        input_style = """
+            QLineEdit, QDoubleSpinBox {
+                padding: 8px;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                font-size: 13px;
+                background-color: white;
+                color: #333;
+            }
+            QLineEdit:focus, QDoubleSpinBox:focus {
+                border-color: #007bff;
+            }
+        """
+        
+        # Meta de Ventas
         self.sales_goal_spin = QDoubleSpinBox()
         self.sales_goal_spin.setRange(0, 999999)
         self.sales_goal_spin.setSuffix(" USD")
         self.sales_goal_spin.setDecimals(2)
-        config_layout.addRow("Meta Mensual de Ventas:", self.sales_goal_spin)
+        self.sales_goal_spin.setMinimumHeight(35)
+        self.sales_goal_spin.setStyleSheet(input_style)
         
+        lbl_goal = QLabel("Meta Mensual de Ventas:")
+        lbl_goal.setStyleSheet("font-weight: bold; font-size: 13px;")
+        form_layout.addRow(lbl_goal, self.sales_goal_spin)
+        
+        # Nombre Empresa
         self.company_name_edit = QLineEdit()
-        config_layout.addRow("Nombre de la Empresa:", self.company_name_edit)
+        self.company_name_edit.setMinimumHeight(35)
+        self.company_name_edit.setStyleSheet(input_style)
         
-        # Tasa Corpóreo - multiplicador para productos corpóreos
+        lbl_company = QLabel("Nombre de la Empresa:")
+        lbl_company.setStyleSheet("font-weight: bold; font-size: 13px;")
+        form_layout.addRow(lbl_company, self.company_name_edit)
+        
+        # Tasa Corpóreo
         self.tasa_corporeo_spin = QDoubleSpinBox()
         self.tasa_corporeo_spin.setRange(0.01, 99999.99)
         self.tasa_corporeo_spin.setValue(1.0)
         self.tasa_corporeo_spin.setDecimals(2)
         self.tasa_corporeo_spin.setSingleStep(0.01)
         self.tasa_corporeo_spin.setGroupSeparatorShown(True)
+        self.tasa_corporeo_spin.setMinimumHeight(35)
+        self.tasa_corporeo_spin.setStyleSheet(input_style)
+        
         # Configurar locale para separador de miles
         from PySide6.QtCore import QLocale
         locale = QLocale(QLocale.Language.Spanish, QLocale.Country.Venezuela)
         self.tasa_corporeo_spin.setLocale(locale)
         self.tasa_corporeo_spin.setToolTip("Multiplicador aplicado al subtotal de productos corpóreos antes de dividir por tasa BCV")
-        config_layout.addRow("Tasa Corpóreo:", self.tasa_corporeo_spin)
         
+        lbl_tasa = QLabel("Tasa Corpóreo:")
+        lbl_tasa.setStyleSheet("font-weight: bold; font-size: 13px;")
+        form_layout.addRow(lbl_tasa, self.tasa_corporeo_spin)
+        
+        layout.addWidget(form_container)
+        layout.addStretch()
+        
+        # Barra de botones inferior
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(15)
+        
+        # Botón para probar conexión a BD
+        test_btn = QPushButton("🧪 Probar conexión BD")
+        test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        test_btn.clicked.connect(self._test_db_connection)
+        test_btn.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #eef2f7;
+            }
+        """)
+
         # Botón para guardar configuraciones
-        save_btn = QPushButton("💾 Guardar Configuraciones")
+        save_btn = QPushButton("💾 Guardar Cambios")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.clicked.connect(self._save_system_config)
         save_btn.setStyleSheet("""
             QPushButton {
                 padding: 10px 20px;
                 background-color: #007bff;
                 color: white;
-                border: none;
-                border-radius: 4px;
+                border: 1px solid #0056b3;
+                border-radius: 6px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -562,14 +580,11 @@ class ConfigView(QWidget):
             }
         """)
 
-        # Botón para probar conexión a BD
-        test_btn = QPushButton("🧪 Probar conexión a Base de Datos")
-        test_btn.clicked.connect(self._test_db_connection)
-
-        layout.addWidget(config_group)
-        layout.addWidget(test_btn)
-        layout.addWidget(save_btn)
-        layout.addStretch()
+        btn_layout.addStretch()
+        btn_layout.addWidget(test_btn)
+        btn_layout.addWidget(save_btn)
+        
+        layout.addLayout(btn_layout)
         
         # Cargar configuraciones actuales
         self._load_system_config()

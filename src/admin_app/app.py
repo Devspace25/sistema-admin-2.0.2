@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
 
         # Vistas (Home/Clientes/Productos/...) — Clientes tiene sus propios botones
         self._home_view = HomeView(self._session_factory, self._current_user)
+        self._home_view.navigate_requested.connect(self.on_navigate)
         self._customers_view = CustomersView(self._session_factory)
         self._products_view = SimpleProductsView(self._session_factory)
         self._sales_view = SalesView(self._session_factory, self)

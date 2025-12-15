@@ -79,49 +79,42 @@ class CustomersView(QWidget):
     def _setupUi(self) -> None:
         # Layout principal
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
         self.setMinimumHeight(400)
 
-        # Header con búsqueda y filtros
-        header = self._setupHeader()
-        main_layout.addLayout(header)
-
-        # Tabla
-        self._table = self._setupTable()
-        main_layout.addWidget(self._table)
-
-    def _setupHeader(self) -> QVBoxLayout:
-        header = QVBoxLayout()
+        # Top Bar (Search Left, Buttons Right)
+        top_bar = QHBoxLayout()
         
-        # Búsqueda y filtros
-        search_row = QHBoxLayout()
+        # Search
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(10)
         
+        lbl_search = QLabel("Buscar:")
         self.search_edit = QLineEdit(self)
         self.search_edit.setPlaceholderText("🔍 Buscar por nombre, apellido, documento o email...")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._apply_filter)
         
         self.filter_document = QComboBox(self)
-        self.filter_document.addItems(["Todos", "V- (Venezolano)", "J- (Jurídico)", "E- (Extranjero)"])
+        self.filter_document.addItems(["Todos", "V-", "J-", "E-"])
+        self.filter_document.setToolTip("Filtrar por tipo de documento")
         self.filter_document.currentTextChanged.connect(self._apply_filter)
         
-        search_row.addWidget(QLabel("Búsqueda:"))
-        search_row.addWidget(self.search_edit, 2)
-        search_row.addWidget(QLabel("Documento:"))
-        search_row.addWidget(self.filter_document)
-        search_row.addStretch()
+        search_layout.addWidget(lbl_search)
+        search_layout.addWidget(self.search_edit)
+        search_layout.addWidget(self.filter_document)
+        
+        top_bar.addWidget(search_container, 1)
         
         # Botones de acción
-        actions_row = QHBoxLayout()
-        
         self.btn_new = QPushButton("➕ Nuevo Cliente", self)
         self.btn_edit = QPushButton("✏️ Editar", self)
         self.btn_delete = QPushButton("🗑️ Eliminar", self)
         self.btn_export = QPushButton("📄 Exportar", self)
         self.btn_refresh = QPushButton("🔄 Actualizar", self)
-        
-        self.btn_new.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 16px; }")
-    # Estilo neutro por defecto (primario se aplicará solo donde proceda)
-        self.btn_delete.setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 8px 16px; }")
         
         self.btn_new.clicked.connect(self._on_new)
         self.btn_edit.clicked.connect(self._on_edit)
@@ -129,26 +122,37 @@ class CustomersView(QWidget):
         self.btn_export.clicked.connect(self._on_export)
         self.btn_refresh.clicked.connect(self.reload_async)
         
-        actions_row.addWidget(self.btn_new)
-        actions_row.addWidget(self.btn_edit)
-        actions_row.addWidget(self.btn_delete)
-        actions_row.addStretch()
-        actions_row.addWidget(self.btn_export)
-        actions_row.addWidget(self.btn_refresh)
+        # Style buttons
+        for btn in [self.btn_new, self.btn_edit, self.btn_delete, self.btn_export, self.btn_refresh]:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    color: #2c3e50;
+                }
+                QPushButton:hover {
+                    background-color: #eef2f7;
+                }
+                QPushButton:disabled {
+                    background-color: #f0f0f0;
+                    color: #bdc3c7;
+                }
+            """)
+            top_bar.addWidget(btn)
+            
+        main_layout.addLayout(top_bar)
+
+        # Tabla
+        self._table = self._setupTable()
+        main_layout.addWidget(self._table)
         
         # Estado
-        status_row = QHBoxLayout()
         self._status_label = QLabel("Cargando...", self)
         self._status_label.setStyleSheet("color: #666; font-style: italic; padding: 4px;")
-        status_row.addWidget(self._status_label)
-        status_row.addStretch()
-        
-        # Agregar todas las filas al header
-        header.addLayout(search_row)
-        header.addLayout(actions_row)
-        header.addLayout(status_row)
-        
-        return header
+        main_layout.addWidget(self._status_label)
 
     def _setupTable(self) -> QTableWidget:
         table = QTableWidget(0, 7, self)

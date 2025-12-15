@@ -55,66 +55,79 @@ class SalesView(QWidget):
         
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        # Título
-        title = QLabel("Gestión de Ventas")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        layout.addWidget(title)
-
-        # Búsqueda
-        search_layout = QHBoxLayout()
-        search_label = QLabel("Búsqueda:")
+        # Top Bar (Search Left, Buttons Right)
+        top_bar = QHBoxLayout()
+        
+        # Search
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(10)
+        
+        lbl_search = QLabel("Buscar:")
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("🔍 Buscar por número de orden, artículo, asesor...")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._apply_filter)
-
-        search_layout.addWidget(search_label)
-        search_layout.addWidget(self.search_edit, 2)
-        search_layout.addStretch()
-        layout.addLayout(search_layout)
-
+        
+        search_layout.addWidget(lbl_search)
+        search_layout.addWidget(self.search_edit)
+        
+        top_bar.addWidget(search_container, 1)
+        
         # Botones de acción
-        button_layout = QHBoxLayout()
-
         self.btn_add = QPushButton("➕ Nueva Venta")
-        # Mantener verde para acción positiva
-        self.btn_add.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 16px; }")
         self.btn_add.clicked.connect(self._on_add_sale)
-        button_layout.addWidget(self.btn_add)
+        top_bar.addWidget(self.btn_add)
 
         self.btn_edit = QPushButton("✏️ Editar")
         self.btn_edit.clicked.connect(self._on_edit_sale)
         self.btn_edit.setEnabled(False)
-        button_layout.addWidget(self.btn_edit)
+        top_bar.addWidget(self.btn_edit)
 
         self.btn_delete = QPushButton("🗑️ Eliminar")
-        # Mantener rojo para acción destructiva
-        self.btn_delete.setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 8px 16px; }")
         self.btn_delete.clicked.connect(self._on_delete_sale)
         self.btn_delete.setEnabled(False)
-        button_layout.addWidget(self.btn_delete)
+        top_bar.addWidget(self.btn_delete)
 
         self.btn_refresh = QPushButton("🔄 Actualizar")
         self.btn_refresh.clicked.connect(self._load_sales)
-        button_layout.addWidget(self.btn_refresh)
+        top_bar.addWidget(self.btn_refresh)
+        
+        # Style buttons
+        for btn in [self.btn_add, self.btn_edit, self.btn_delete, self.btn_refresh]:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    color: #2c3e50;
+                }
+                QPushButton:hover {
+                    background-color: #eef2f7;
+                }
+                QPushButton:disabled {
+                    background-color: #f0f0f0;
+                    color: #bdc3c7;
+                }
+            """)
 
-        button_layout.addStretch()
-
-        # Estado
-        self._status_label = QLabel("Listo", self)
-        self._status_label.setStyleSheet("color: #666; font-style: italic; padding: 4px;")
-        button_layout.addWidget(self._status_label)
-
-        layout.addLayout(button_layout)
+        layout.addLayout(top_bar)
 
         # Tabla de ventas
         self.table = QTableWidget()
         self._setup_table()
         layout.addWidget(self.table)
+        
+        # Estado (Bottom)
+        self._status_label = QLabel("Listo", self)
+        self._status_label.setStyleSheet("color: #666; font-style: italic; padding: 4px;")
+        layout.addWidget(self._status_label)
         
     def _setup_table(self):
         # Configurar columnas de la tabla

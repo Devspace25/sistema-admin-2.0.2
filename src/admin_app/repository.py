@@ -2976,6 +2976,20 @@ def create_worker(session: Session, full_name: str, user_id: int | None = None,
     session.refresh(worker)
     return worker
 
+def delete_worker(session: Session, worker_id: int) -> bool:
+    """Elimina un trabajador y sus metas asociadas."""
+    worker = session.get(Worker, worker_id)
+    if not worker:
+        return False
+        
+    # Eliminar metas asociadas
+    session.query(WorkerGoal).filter(WorkerGoal.worker_id == worker_id).delete()
+    
+    # Eliminar trabajador
+    session.delete(worker)
+    session.commit()
+    return True
+
 def update_worker(session: Session, worker_id: int, full_name: str | None = None, user_id: int | None = None, is_active: bool | None = None,
                   cedula: str | None = None, phone: str | None = None, email: str | None = None,
                   address: str | None = None, job_title: str | None = None, 

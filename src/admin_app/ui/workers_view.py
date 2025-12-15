@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
-from ..repository import list_workers, get_worker_goal
+from ..repository import list_workers, get_worker_goal, delete_worker
 from .worker_dialog import WorkerDialog
 from .worker_goals_dialog import WorkerGoalsDialog
 
@@ -17,28 +17,69 @@ class WorkersView(QWidget):
         self._can_edit = True  # Default to true, updated by set_permissions
         
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
-        # Header
-        header = QHBoxLayout()
-        title = QLabel("Gestión de Trabajadores")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        header.addWidget(title)
-        header.addStretch()
+        # Top Bar (Search Left, Buttons Right)
+        top_bar = QHBoxLayout()
         
-        self.btn_add = QPushButton("Agregar Trabajador")
-        self.btn_add.clicked.connect(self._add_worker)
-        header.addWidget(self.btn_add)
+        # Search
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(10)
         
-        layout.addLayout(header)
-        
-        # Search Bar
-        search_layout = QHBoxLayout()
+        lbl_search = QLabel("Buscar:")
+        # lbl_search.setStyleSheet("font-weight: bold; color: #bdc3c7;") 
         self.edt_search = QLineEdit()
         self.edt_search.setPlaceholderText("Buscar por nombre, cédula o cargo...")
+        # self.edt_search.setFixedWidth(300) # Removed fixed width
         self.edt_search.textChanged.connect(self.refresh)
-        search_layout.addWidget(QLabel("Buscar:"))
+        
+        search_layout.addWidget(lbl_search)
         search_layout.addWidget(self.edt_search)
-        layout.addLayout(search_layout)
+        
+        top_bar.addWidget(search_container, 1) # Expand search container
+        # top_bar.addStretch() # Removed stretch to let search fill space
+        
+        # Buttons
+        self.btn_add = QPushButton("➕ Nuevo Trabajador")
+        self.btn_add.clicked.connect(self._add_worker)
+        
+        self.btn_edit = QPushButton("✏️ Editar")
+        self.btn_edit.setEnabled(False)
+        self.btn_edit.clicked.connect(self._edit_selected)
+        
+        self.btn_delete = QPushButton("🗑️ Eliminar")
+        self.btn_delete.setEnabled(False)
+        self.btn_delete.clicked.connect(self._delete_selected)
+        
+        self.btn_goals = QPushButton("🎯 Metas")
+        self.btn_goals.setEnabled(False)
+        self.btn_goals.clicked.connect(self._goals_selected)
+        
+        # Style buttons
+        for btn in [self.btn_add, self.btn_edit, self.btn_delete, self.btn_goals]:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    color: #2c3e50;
+                }
+                QPushButton:hover {
+                    background-color: #eef2f7;
+                }
+                QPushButton:disabled {
+                    background-color: #f0f0f0;
+                    color: #bdc3c7;
+                }
+            """)
+            top_bar.addWidget(btn)
+            
+        layout.addLayout(top_bar)
         
         # Table
         self.table = QTableWidget()
@@ -50,22 +91,6 @@ class WorkersView(QWidget):
         self.table.cellDoubleClicked.connect(self._on_double_click)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.table)
-        
-        # Action Buttons (Bottom)
-        actions_layout = QHBoxLayout()
-        self.btn_edit = QPushButton("Editar Seleccionado")
-        self.btn_edit.setEnabled(False)
-        self.btn_edit.clicked.connect(self._edit_selected)
-        
-        self.btn_goals = QPushButton("Gestionar Metas")
-        self.btn_goals.setEnabled(False)
-        self.btn_goals.clicked.connect(self._goals_selected)
-        
-        actions_layout.addWidget(self.btn_edit)
-        actions_layout.addWidget(self.btn_goals)
-        actions_layout.addStretch()
-        
-        layout.addLayout(actions_layout)
         
         self.refresh()
         
@@ -107,6 +132,7 @@ class WorkersView(QWidget):
     def _on_selection_changed(self):
         has_selection = len(self.table.selectedItems()) > 0
         self.btn_edit.setEnabled(has_selection and self._can_edit)
+        self.btn_delete.setEnabled(has_selection and self._can_edit)
         self.btn_goals.setEnabled(has_selection and self._can_edit)
 
     def _get_selected_id(self) -> int | None:
@@ -116,6 +142,29 @@ class WorkersView(QWidget):
             if item_id:
                 return int(item_id.text())
         return None
+
+    def _delete_selected(self):
+        worker_id = self._get_selected_id()
+        if not worker_id:
+            return
+            
+        reply = QMessageBox.question(
+            self, 
+            "Confirmar eliminación",
+            "¿Está seguro de que desea eliminar este trabajador?\nEsta acción no se puede deshacer.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                with self.session_factory() as session:
+                    if delete_worker(session, worker_id):
+                        QMessageBox.information(self, "Éxito", "Trabajador eliminado correctamente.")
+                        self.refresh()
+                    else:
+                        QMessageBox.warning(self, "Error", "No se pudo encontrar el trabajador.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Error al eliminar trabajador: {e}")
 
     def _edit_selected(self):
         worker_id = self._get_selected_id()

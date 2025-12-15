@@ -39,30 +39,56 @@ class SimpleProductsView(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # Título
-        self.title_label = QLabel("📦 Productos Configurables")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        self.title_label.setFont(title_font)
-        layout.addWidget(self.title_label)
+        # Top Bar (Search Left, Buttons Right)
+        top_bar = QHBoxLayout()
+        
+        # Search
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(10)
+        
+        lbl_search = QLabel("Buscar:")
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("🔍 Buscar producto...")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._filter_products)
+        
+        search_layout.addWidget(lbl_search)
+        search_layout.addWidget(self.search_edit)
+        
+        top_bar.addWidget(search_container, 1)
 
         # Botones de acción (productos)
-        btn_layout = QHBoxLayout()
-        self.btn_refresh = QPushButton("🔄 Actualizar")
-        btn_layout.addWidget(self.btn_refresh)
         self.btn_new = QPushButton("➕ Nuevo Producto")
-        btn_layout.addWidget(self.btn_new)
         self.btn_edit = QPushButton("✏ Editar")
-        btn_layout.addWidget(self.btn_edit)
         self.btn_parameters = QPushButton("⚙ Parámetros")
-        btn_layout.addWidget(self.btn_parameters)
         self.btn_values = QPushButton("📝 Valores")
-        btn_layout.addWidget(self.btn_values)
         self.btn_delete = QPushButton("🗑 Eliminar")
-        btn_layout.addWidget(self.btn_delete)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        self.btn_refresh = QPushButton("🔄 Actualizar")
+        
+        # Style buttons
+        for btn in [self.btn_new, self.btn_edit, self.btn_parameters, self.btn_values, self.btn_delete, self.btn_refresh]:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    color: #2c3e50;
+                }
+                QPushButton:hover {
+                    background-color: #eef2f7;
+                }
+                QPushButton:disabled {
+                    background-color: #f0f0f0;
+                    color: #bdc3c7;
+                }
+            """)
+            top_bar.addWidget(btn)
+            
+        layout.addLayout(top_bar)
 
         # Tabla de productos (vista única)
         self.table_products = QTableWidget()
@@ -89,6 +115,13 @@ class SimpleProductsView(QWidget):
         self.table_products.customContextMenuRequested.connect(self._show_context_menu)
         self.table_products.itemDoubleClicked.connect(self._configure_from_double_click)
         
+    def _filter_products(self, text):
+        """Filtrar filas de la tabla según el texto."""
+        text = text.lower()
+        for row in range(self.table_products.rowCount()):
+            item = self.table_products.item(row, 0)
+            match = text in item.text().lower() if item else False
+            self.table_products.setRowHidden(row, not match)
         
     def _load_products(self):
         """Cargar productos configurables del sistema de parámetros."""
@@ -112,9 +145,6 @@ class SimpleProductsView(QWidget):
                     created_date = product['created_at'].strftime('%d/%m/%Y')
                     self.table_products.setItem(row, 2, QTableWidgetItem(created_date))
                 
-                # Actualizar el título con la cantidad
-                title_text = f"📦 Productos Configurables ({len(products)} productos)"
-                self.title_label.setText(title_text)
                 # Nada más que hacer aquí; la gestión de tablas vive en el diálogo
                     
         except Exception as e:

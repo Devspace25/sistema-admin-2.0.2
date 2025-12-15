@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QBarSeries, QBarSet, QValueAxis, QBarCategoryAxis
 from PySide6.QtGui import QPainter, QFont, QColor, QIcon, QPixmap, QBrush, QLinearGradient
-from PySide6.QtCore import Qt, QTimer, QSize, QMargins
+from PySide6.QtCore import Qt, QTimer, QSize, QMargins, Signal
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
@@ -24,6 +24,73 @@ def get_icon_path(name: str) -> str:
     # Adjust path based on your project structure
     base_path = os.path.join(os.path.dirname(__file__), "..", "assets", "icons")
     return os.path.join(base_path, name)
+
+class QuickActionsWidget(QFrame):
+    action_requested = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: white;
+                border-radius: 12px;
+            }
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 12px;
+                text-align: left;
+                font-size: 13px;
+                color: #2c3e50;
+            }
+            QPushButton:hover {
+                background-color: #eef2f7;
+                border-color: #d0d0d0;
+            }
+            QLabel {
+                color: #7f8c8d;
+                font-weight: bold;
+                font-size: 12px;
+                margin-bottom: 5px;
+            }
+        """)
+        
+        # Shadow
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 30))
+        shadow.setYOffset(2)
+        self.setGraphicsEffect(shadow)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        
+        title = QLabel("ACCESOS RÁPIDOS")
+        layout.addWidget(title)
+        
+        # Actions
+        actions = [
+            ("🛒 Nueva Venta", "ventas"),
+            ("👥 Nuevo Cliente", "clientes"),
+            ("📦 Nuevo Pedido", "pedidos"),
+            ("📊 Ver Reportes", "reportes_diarios")
+        ]
+        
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        
+        for i, (text, route) in enumerate(actions):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMaximumWidth(300) # Prevent buttons from getting too wide
+            btn.clicked.connect(lambda checked=False, r=route: self.action_requested.emit(r))
+            grid.addWidget(btn, i // 2, i % 2)
+            
+        layout.addLayout(grid)
+        layout.addStretch()
 
 class ModernKpiCard(QFrame):
     def __init__(self, title: str, value: str, icon_name: str, color: str, parent=None) -> None:
@@ -253,6 +320,8 @@ class UserGoalsDialog(QDialog):
             QMessageBox.critical(self, "Error", f"Error guardando metas: {e}")
 
 class HomeView(QWidget):
+    navigate_requested = Signal(str)
+
     def __init__(self, session_factory: sessionmaker, current_user: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._session_factory = session_factory
@@ -360,11 +429,11 @@ class HomeView(QWidget):
             
         main_layout.addLayout(kpi_layout)
         
-        # --- Main Content (Chart + Team) ---
+        # --- Main Content (Chart | Quick Actions + Team) ---
         content_layout = QHBoxLayout()
         content_layout.setSpacing(20)
         
-        # 1. Chart Section
+        # Left Column (Chart)
         chart_container = QFrame()
         chart_container.setStyleSheet("""
             QFrame {
@@ -394,14 +463,23 @@ class HomeView(QWidget):
         self.chart_view = QChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.chart_view.setStyleSheet("background: transparent; border: none;")
-        self.chart_view.setFixedHeight(300)
+        # self.chart_view.setFixedHeight(220) # Let it expand vertically
         
         chart_layout.addWidget(self.chart_view)
         
+        # Right Column (Quick Actions + Team)
+        right_column = QWidget()
+        right_layout = QVBoxLayout(right_column)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(20)
+        
+        # 1. Quick Actions Section
+        quick_actions = QuickActionsWidget()
+        quick_actions.action_requested.connect(self.navigate_requested.emit)
+        right_layout.addWidget(quick_actions)
+        
         # 2. Team Section
         team_container = QFrame()
-        team_container.setFixedWidth(350) # Fixed width for sidebar feel
-        team_container.setFixedHeight(380)
         team_container.setStyleSheet("""
             QFrame {
                 background-color: white;
@@ -449,9 +527,11 @@ class HomeView(QWidget):
         scroll.setWidget(self.team_list_widget)
         team_layout.addWidget(scroll)
         
+        right_layout.addWidget(team_container)
+        
         # Add to content layout
-        content_layout.addWidget(chart_container, 2) # Chart takes 2/3
-        content_layout.addWidget(team_container, 1)  # Team takes 1/3
+        content_layout.addWidget(chart_container, 3) # Chart takes 60%
+        content_layout.addWidget(right_column, 2)    # Sidebar takes 40%
         
         main_layout.addLayout(content_layout)
         main_layout.addStretch()
