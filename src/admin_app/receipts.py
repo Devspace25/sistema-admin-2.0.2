@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 import json
+import os
+import shutil
 
 
 def _data_dir() -> Path:
@@ -765,3 +767,126 @@ def print_order_pdf(*, order_id: int, sale_id: int, product_name: str, status: s
     c.save()
     (out.with_suffix('.json')).write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding='utf-8')
     return out
+
+
+def print_ticket_excel_pdf(order_info: dict, output_path: Path = None) -> Path:
+    """
+    Rellena el template de Excel y lo exporta a PDF.
+    order_info debe contener:
+    - order_number
+    - date
+    - customer_name, customer_address, customer_rif, customer_phone
+    - items: list of dict(qty, desc, total)
+    - subtotal, tax, total
+    - advisor
+    - payment_method
+    """
+    import openpyxl
+    try:
+        import win32com.client
+        import pythoncom
+    except ImportError:
+        win32com = None
+
+    template_path = Path.cwd() / "Formato Recibo" / "formato_recibo.xlsx"
+    if not template_path.exists():
+        raise FileNotFoundError(f"No se encontró el formato en: {template_path}")
+
+    # Crear archivo temporal para el Excel lleno
+    temp_dir = Path.cwd() / "data" / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_excel = temp_dir / f"temp_ticket_{order_info.get('order_number', 'new')}.xlsx"
+    
+    shutil.copy2(template_path, temp_excel)
+    
+    wb = openpyxl.load_workbook(temp_excel)
+    ws = wb.active # Asumimos que es la hoja activa o "TICKET"
+    
+    # Mapeo de datos
+    # Encabezados
+    # C3: Cliente
+    if order_info.get('customer_name'):
+        ws['C3'] = order_info['customer_name']
+    # C4: Dirección
+    if order_info.get('customer_address'):
+        ws['C4'] = order_info['customer_address']
+    # C5: RIF
+    if order_info.get('customer_rif'):
+        ws['C5'] = order_info['customer_rif']
+    # C6: Teléfono
+    if order_info.get('customer_phone'):
+        ws['C6'] = order_info['customer_phone']
+        
+    # E4: Orden No
+    if order_info.get('order_number'):
+        ws['E4'] = order_info['order_number']
+        
+    # Items (Desde fila 9)
+    items = order_info.get('items', [])
+    start_row = 9
+    max_rows = 6 # Hasta fila 14 aprox
+    
+    for i, item in enumerate(items[:max_rows]):
+        row = start_row + i
+        ws[f'A{row}'] = item.get('qty', 1)
+        ws[f'B{row}'] = item.get('desc', '')
+        ws[f'E{row}'] = item.get('total', 0.0)
+        
+    # Totales
+    # B14: Metodo Pago (M.P.)
+    if order_info.get('payment_method'):
+        ws['B14'] = order_info['payment_method']
+        
+    # E15: Diseño (Bs)
+    if order_info.get('design_bs'):
+        ws['E15'] = order_info['design_bs']
+        
+    # E16: Instalación (Bs)
+    if order_info.get('installation_bs'):
+        ws['E16'] = order_info['installation_bs']
+        
+    # E17: IVA (Bs)
+    if order_info.get('iva_bs'):
+        ws['E17'] = order_info['iva_bs']
+        
+    # C18: Asesor
+    if order_info.get('advisor'):
+        ws['C18'] = order_info['advisor']
+        
+    wb.save(temp_excel)
+    wb.close()
+    
+    # Convertir a PDF usando Excel COM
+    if output_path is None:
+        output_path = Path.cwd() / "data" / "receipts" / f"ticket_{order_info.get('order_number', 'temp')}.pdf"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+    _excel_to_pdf(temp_excel, output_path)
+    
+    # Limpiar temporal
+    try:
+        os.remove(temp_excel)
+    except:
+        pass
+        
+    return output_path
+
+def _excel_to_pdf(excel_path: Path, pdf_path: Path):
+    import win32com.client
+    import pythoncom
+    
+    pythoncom.CoInitialize()
+    
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    
+    try:
+        wb = excel.Workbooks.Open(str(excel_path.resolve()))
+        # ExportAsFixedFormat 0 = xlTypePDF
+        wb.ExportAsFixedFormat(0, str(pdf_path.resolve()))
+        wb.Close(False)
+    except Exception as e:
+        raise e
+    finally:
+        excel.Quit()

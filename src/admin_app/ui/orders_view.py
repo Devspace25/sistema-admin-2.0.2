@@ -419,78 +419,92 @@ class OrdersView(QWidget):
         try:
             with self._session_factory() as session:
                 order = get_order_by_id(session, sid)
-            if not order:
-                return
-            from ..receipts import print_order_pdf, print_order_80mm
-            # extraer customer info desde details_json.meta.cliente si existe
-            customer = None
-            try:
-                details = json.loads(order.details_json or '{}')
-                meta = details.get('meta') or {}
-                cliente_meta = meta.get('cliente') or meta.get('cliente_id') or meta.get('cliente_meta')
-                if isinstance(cliente_meta, dict):
-                    customer = {
-                        'name': cliente_meta.get('name') or cliente_meta.get('nombre') or '',
-                        'short_address': cliente_meta.get('direccion_corta') or cliente_meta.get('direccion') or '',
-                        'document': cliente_meta.get('documento') or cliente_meta.get('rif') or '',
-                        'phone': cliente_meta.get('telefono') or cliente_meta.get('telefono_movil') or '',
-                    }
-            except Exception:
-                customer = None
-
-            # Preguntar al usuario dónde guardar el ticket (PDF)
-            try:
-                default_name = f"{(order.order_number or f'ORD-{int(order.id):03d}')}.pdf"
-                start_dir = str(Path.home())
-                save_path, _ = QFileDialog.getSaveFileName(self, "Guardar ticket como", str(Path(start_dir) / default_name), "PDF Files (*.pdf)")
-                if not save_path:
-                    # Usuario canceló
+                if not order:
                     return
-            except Exception:
-                save_path = None
+                
+                # Obtener venta asociada para items y cliente
+                from ..models import Sale, Customer
+                sale = session.get(Sale, order.sale_id) if order.sale_id else None
+                
+                # Preparar datos para el ticket Excel
+                order_info = {
+                    'order_number': order.order_number,
+                    'date': order.created_at.strftime('%Y-%m-%d'),
+                    'items': [],
+                    'advisor': getattr(sale, 'asesor', '') if sale else '',
+                    'payment_method': getattr(sale, 'forma_pago', '') if sale else '',
+                }
+                
+                # Cliente
+                if sale:
+                    order_info['customer_name'] = sale.cliente
+                    if sale.cliente_id:
+                        cust_obj = session.get(Customer, sale.cliente_id)
+                        if cust_obj:
+                            order_info['customer_name'] = cust_obj.name
+                            order_info['customer_address'] = cust_obj.short_address or ""
+                            order_info['customer_rif'] = cust_obj.document or ""
+                            order_info['customer_phone'] = cust_obj.phone or ""
+                
+                # Fallback cliente desde details
+                if not order_info.get('customer_name'):
+                     try:
+                        details = json.loads(order.details_json or '{}')
+                        meta = details.get('meta') or {}
+                        cliente_meta = meta.get('cliente') or meta.get('cliente_id') or meta.get('cliente_meta')
+                        if isinstance(cliente_meta, dict):
+                            order_info['customer_name'] = cliente_meta.get('name') or cliente_meta.get('nombre')
+                            order_info['customer_address'] = cliente_meta.get('direccion_corta') or cliente_meta.get('direccion')
+                            order_info['customer_rif'] = cliente_meta.get('documento') or cliente_meta.get('rif')
+                            order_info['customer_phone'] = cliente_meta.get('telefono') or cliente_meta.get('telefono_movil')
+                     except:
+                        pass
 
-            # Preferir PDF si reportlab está disponible
-            try:
-                if save_path:
-                    path = print_order_pdf(
-                        order_id=int(order.id),
-                        sale_id=int(order.sale_id or 0),
-                        product_name=(order.product_name or ''),
-                        status=(order.status or ''),
-                        details_json=(order.details_json or '{}'),
-                        customer=customer,
-                        out_path=Path(save_path),
-                    )
+                # Items
+                tasa = getattr(sale, 'tasa_bcv', 0.0) or 0.0
+                
+                # Extras (Diseño, Instalación, IVA) en Bs
+                if sale:
+                    order_info['design_bs'] = (sale.diseno_usd or 0.0) * tasa
+                    # Instalación se mapea desde ingresos_usd según convención
+                    order_info['installation_bs'] = (sale.ingresos_usd or 0.0) * tasa
+                    order_info['iva_bs'] = (sale.iva or 0.0) * tasa
+                
+                if sale and sale.items:
+                    for item in sale.items:
+                        # Calcular total en Bs si hay tasa, sino usar 0 o el valor en USD si se prefiere (aquí asumimos Bs)
+                        total_bs = (item.total_price or 0.0) * tasa
+                        
+                        # Usar descripción de la venta si existe, de lo contrario usar el nombre del producto
+                        description_text = sale.descripcion if sale.descripcion else item.product_name
+                        
+                        order_info['items'].append({
+                            'qty': item.quantity,
+                            'desc': description_text,
+                            'total': total_bs
+                        })
                 else:
-                    path = print_order_pdf(
-                        order_id=int(order.id),
-                        sale_id=int(order.sale_id or 0),
-                        product_name=(order.product_name or ''),
-                        status=(order.status or ''),
-                        details_json=(order.details_json or '{}'),
-                        customer=customer,
-                    )
-            except Exception:
-                # Fallback: usar el generador 80mm que también devuelve Path; si acepta out_path lo usará, si no, guardará en default receipts folder
-                try:
-                    if save_path:
-                        path = print_order_80mm(
-                            order_id=int(order.id), sale_id=int(order.sale_id or 0), product_name=(order.product_name or ''), status=(order.status or ''), details_json=(order.details_json or '{}')
-                        )
-                        # Si el fallback no soporta out_path, intentar mover/renombrar al destino elegido
-                        try:
-                            p = Path(path)
-                            dest = Path(save_path)
-                            p.replace(dest)
-                            path = dest
-                        except Exception:
-                            pass
-                    else:
-                        path = print_order_80mm(order_id=int(order.id), sale_id=int(order.sale_id or 0), product_name=(order.product_name or ''), status=(order.status or ''), details_json=(order.details_json or '{}'))
-                except Exception as e:
-                    QMessageBox.critical(self, 'Imprimir', f'Error al generar el ticket: {e}')
-                    return
+                    # Fallback si no hay items
+                    desc_fallback = sale.descripcion if (sale and sale.descripcion) else order.product_name
+                    order_info['items'].append({
+                        'qty': 1,
+                        'desc': desc_fallback,
+                        'total': 0.0
+                    })
 
-            QMessageBox.information(self, "Pedidos", f"Orden guardada en:\n{path}")
-        except Exception:
-            QMessageBox.warning(self, "Pedidos", "No se pudo imprimir la orden.")
+            # Preguntar dónde guardar
+            default_name = f"{(order.order_number or f'ORD-{int(order.id):03d}')}.pdf"
+            start_dir = str(Path.home())
+            save_path, _ = QFileDialog.getSaveFileName(self, "Guardar ticket como", str(Path(start_dir) / default_name), "PDF Files (*.pdf)")
+            if not save_path:
+                return
+
+            from ..receipts import print_ticket_excel_pdf
+            path = print_ticket_excel_pdf(order_info, Path(save_path))
+            
+            QMessageBox.information(self, "Pedidos", f"Ticket generado en:\n{path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo imprimir el ticket: {e}")
+            import traceback
+            traceback.print_exc()
