@@ -469,6 +469,14 @@ class OrdersView(QWidget):
                     # Instalación se mapea desde ingresos_usd según convención
                     order_info['installation_bs'] = (sale.ingresos_usd or 0.0) * tasa
                     order_info['iva_bs'] = (sale.iva or 0.0) * tasa
+                    
+                    # Lógica de estado de pago (A24)
+                    restante_usd = sale.restante or 0.0
+                    if restante_usd <= 0.01:
+                        order_info['payment_status_text'] = "PAGO TOTAL"
+                    else:
+                        abono_usd = sale.abono_usd or 0.0
+                        order_info['payment_status_text'] = f"ABONO $ {abono_usd:,.2f} POR COBRAR $ {restante_usd:,.2f}"
                 
                 if sale and sale.items:
                     for item in sale.items:

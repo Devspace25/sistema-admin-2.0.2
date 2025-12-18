@@ -331,21 +331,42 @@ def print_order_pdf(*, order_id: int, sale_id: int, product_name: str, status: s
     iva_amount = _to_float(sale_info.get('iva'), 0.0)
 
     description_text = str(details.get('descripcion_text') or sale_info.get('descripcion') or product_name or '').strip()
-    if not description_text and items:
+    
+    # Detectar si la descripción es redundante (concatenación de items)
+    if items and description_text:
         try:
-            first_desc = items[0].get('descripcion') or items[0].get('label') or product_name
-            description_text = str(first_desc)
+            item_descs = []
+            for item in items:
+                d = str(item.get('descripcion') or item.get('label') or item.get('product_name') or '').strip()
+                if d:
+                    item_descs.append(d)
+            auto_desc = " + ".join(item_descs)
+            # Si es idéntica, la suprimimos para no duplicar info en el ticket
+            if description_text.strip() == auto_desc.strip():
+                description_text = ""
         except Exception:
             pass
 
     description_lines: list[str] = []
-    for raw_line in description_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        description_lines.extend(_wrap_text(line, width=38))
+    
+    if description_text:
+        for raw_line in description_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            description_lines.extend(_wrap_text(line, width=38))
 
-    if not description_lines:
+    # Agregar notas adicionales si existen
+    notes_text = str(sale_info.get('notes') or '').strip()
+    if notes_text:
+        for raw_line in notes_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            description_lines.extend(_wrap_text(line, width=38))
+
+    # Solo usar fallback si no hay nada que mostrar y no hay items
+    if not description_lines and not items:
         description_lines.append(product_name or '—')
 
     # Preparar datos de items (descripcion, cantidad y subtotal en Bs)
@@ -358,8 +379,23 @@ def print_order_pdf(*, order_id: int, sale_id: int, product_name: str, status: s
                 subtotal_bs = _to_float(item.get('subtotal_usd'), 0.0) * rate_bcv
             if subtotal_bs == 0.0 and idx == 1 and total_bs:
                 subtotal_bs = total_bs
-            desc = str(item.get('descripcion') or item.get('label') or product_name or f'Item {idx}')
-            item_lines.append((desc, qty, subtotal_bs))
+            
+            # Priorizar descripción específica del item
+            raw_desc = str(item.get('descripcion') or item.get('product_name') or item.get('label') or product_name or f'Item {idx}')
+            
+            # Si la descripción contiene " + " y es muy larga, probablemente es la concatenación global.
+            # Intentar limpiar si es posible, o usar solo la primera parte si coincide con el nombre del producto.
+            if " + " in raw_desc and len(raw_desc) > 50:
+                # Si tenemos un nombre de producto específico en el item, úsalo
+                if item.get('product_name'):
+                    raw_desc = item.get('product_name')
+                else:
+                    # Si no, intentar tomar el primer segmento
+                    parts = raw_desc.split(" + ")
+                    if parts:
+                        raw_desc = parts[0]
+
+            item_lines.append((raw_desc, qty, subtotal_bs))
     else:
         item_lines.append((product_name or 'Servicio', 1.0, total_bs or summary_amount))
 
@@ -426,344 +462,233 @@ def print_order_pdf(*, order_id: int, sale_id: int, product_name: str, status: s
 
     emission_time = datetime.now().strftime('%H:%M:%S')
 
-    # --- Diseño profesional tipo recibo/factura ---
-    page_height = 280 * mm  # Aumentado para mejor espaciado
+    # --- Diseño profesional tipo recibo/factura (REDISEÑO SIMPLE) ---
+    # Asegurar dimensiones de 80mm
     width = 80 * mm
+    # Configuración específica solicitada: 80x297mm
+    page_height = 297 * mm 
+    
     c = canvas.Canvas(str(out), pagesize=(width, page_height))
+    c.setPageSize((width, page_height))
     
     # Márgenes y espaciado
-    margin_x = 5 * mm
-    margin_y = 5 * mm
-    line_h = 4.5 * mm
+    margin_x = 2 * mm 
+    margin_y = 1 * mm 
+    line_h = 4.0 * mm 
     y = page_height - margin_y
 
     def draw_centered(text: str, y_pos: float, font: str = 'Helvetica', size: int = 9, bold: bool = False) -> float:
-        """Dibuja texto centrado y retorna nueva posición Y."""
         font_name = f'{font}-Bold' if bold else font
         c.setFont(font_name, size)
         c.drawCentredString(width / 2, y_pos, text)
         return y_pos - line_h
 
     def draw_left(text: str, y_pos: float, x_pos: float = None, font: str = 'Helvetica', size: int = 8, bold: bool = False) -> float:
-        """Dibuja texto alineado a la izquierda."""
         font_name = f'{font}-Bold' if bold else font
         c.setFont(font_name, size)
         c.drawString(x_pos if x_pos is not None else margin_x, y_pos, text)
         return y_pos - line_h
 
     def draw_right(text: str, y_pos: float, font: str = 'Helvetica', size: int = 8, bold: bool = False) -> float:
-        """Dibuja texto alineado a la derecha."""
         font_name = f'{font}-Bold' if bold else font
         c.setFont(font_name, size)
         c.drawRightString(width - margin_x, y_pos, text)
         return y_pos - line_h
 
-    def draw_line_separator(y_pos: float, style: str = 'solid') -> float:
-        """Dibuja línea separadora horizontal."""
-        c.setLineWidth(0.5 if style == 'solid' else 0.3)
-        if style == 'dashed':
-            c.setDash(2, 2)
+    def draw_line_separator(y_pos: float, width_line: float = 1.5) -> float:
+        c.setLineWidth(width_line)
         c.line(margin_x, y_pos, width - margin_x, y_pos)
-        c.setDash()  # Reset
         return y_pos - line_h * 0.5
 
-    def draw_box(x: float, y: float, w: float, h: float, fill_color: tuple = None) -> None:
-        """Dibuja un cuadro con borde opcional."""
-        if fill_color:
-            c.setFillColorRGB(*fill_color)
-            c.rect(x, y, w, h, fill=1)
-            c.setFillColorRGB(0, 0, 0)  # Reset a negro
-        else:
-            c.setLineWidth(0.5)
-            c.rect(x, y, w, h, fill=0)
+    # ============================================================
+    # ENCABEZADO (LOGO + DATOS)
+    # ============================================================
+    # Logo placeholder
+    logo_path = Path(__file__).parent.parent.parent / 'assets' / 'img' / 'logo.png'
+    if logo_path.exists():
+        # Centered logo
+        img_w = 30 * mm
+        img_h = 10 * mm
+        c.drawImage(str(logo_path), (width - img_w)/2, y - img_h, width=img_w, height=img_h, preserveAspectRatio=True, mask='auto')
+        y -= img_h + 2
 
-    # ============================================================
-    # ENCABEZADO EMPRESA
-    # ============================================================
-    # Logo placeholder - si existe logo, se puede agregar aquí
-    # logo_path = Path(__file__).parent.parent.parent / 'assets' / 'img' / 'logo.png'
-    # if logo_path.exists():
-    #     c.drawImage(str(logo_path), margin_x, y - 15*mm, width=15*mm, height=15*mm, preserveAspectRatio=True)
-    #     y -= 16*mm
-    
-    y = draw_centered('MR.7 PUBLICIDAD, C.A.', y, size=13, bold=True)
-    y = draw_centered('RIF: J-506410990', y, size=8)
-    y = draw_centered('Av. Universidad, Centro Parque Carabobo', y, size=7)
-    y = draw_centered('Torre A, Piso 4, Ofic 413', y, size=7)
-    y = draw_centered('Tel: (0241) 000-0000', y, size=7)
-    y -= line_h * 0.4
-    
-    # Línea separadora doble para destacar
-    c.setLineWidth(1.5)
-    c.line(margin_x, y, width - margin_x, y)
-    y -= 1.5
-    c.setLineWidth(0.5)
-    c.line(margin_x, y, width - margin_x, y)
+    y = draw_centered('MR.7 PUBLICIDAD, C.A. J-506410990', y, size=10, bold=True)
+    y = draw_centered('Av. Universidad, Centro Parque Carabobo, Torre A, Piso 4, Ofic 413', y, size=7)
     y -= line_h * 0.5
 
     # ============================================================
-    # TÍTULO FACTURA/RECIBO
+    # DATOS CLIENTE / ORDEN (2 COLUMNAS)
     # ============================================================
-    # Cuadro destacado para el título
-    title_box_y = y - line_h * 1.2
-    draw_box(margin_x + 10, title_box_y, width - 2*margin_x - 20, line_h * 1.5, fill_color=(0.2, 0.2, 0.2))
-    c.setFillColorRGB(1, 1, 1)  # Texto blanco
-    c.setFont('Helvetica-Bold', 14)
-    c.drawCentredString(width / 2, title_box_y + line_h * 0.4, 'FACTURA')
-    c.setFillColorRGB(0, 0, 0)  # Reset a negro
-    
-    y = title_box_y - line_h * 0.5
+    # Columna izquierda (Labels + Values)
+    left_x = margin_x
+    # Columna derecha (Labels + Values aligned right)
+    right_x = width - margin_x
 
-    # ============================================================
-    # BLOQUE DE INFORMACIÓN: ORDEN Y VENTA
-    # ============================================================
-    # Fondo gris claro con borde para destacar
-    box_y = y - line_h * 3.5
-    c.setLineWidth(0.8)
-    c.setStrokeColorRGB(0.6, 0.6, 0.6)
-    draw_box(margin_x, box_y, width - 2*margin_x, line_h * 4, fill_color=(0.94, 0.94, 0.94))
-    c.setStrokeColorRGB(0, 0, 0)  # Reset
-    
-    info_x = margin_x + 3
-    c.setFont('Helvetica-Bold', 7)
-    c.drawString(info_x, y - 4, 'No. Orden:')
-    c.setFont('Helvetica-Bold', 11)
-    c.drawString(info_x + 20, y - 4, order_digits.zfill(6))
-    
-    c.setFont('Helvetica-Bold', 7)
-    c.drawString(info_x, y - 11.5, 'No. Venta:')
-    c.setFont('Helvetica', 9)
-    c.drawString(info_x + 20, y - 11.5, sale_display or f'V-{int(sale_id):06d}' if sale_id else '—')
-    
-    c.setFont('Helvetica-Bold', 7)
-    c.drawString(info_x, y - 18.5, 'Fecha:')
+    # Fila 1: Cliente | Orden
+    c.setFont('Helvetica-Bold', 8)
+    c.drawString(left_x, y, 'Cliente:')
     c.setFont('Helvetica', 8)
-    c.drawString(info_x + 20, y - 18.5, f'{datetime.now().strftime("%d/%m/%Y")} {emission_time}')
+    # Truncar nombre cliente si es muy largo
+    c.drawString(left_x + 12*mm, y, (resolved_customer.get('name') or '---Seleccione---')[:20])
     
-    if entrega_label and entrega_label != 'N/A':
-        c.setFont('Helvetica-Bold', 7)
-        c.drawString(info_x, y - 25.5, 'Entrega:')
-        c.setFont('Helvetica', 8)
-        c.drawString(info_x + 20, y - 25.5, entrega_label[:25])
-    
-    y = box_y - line_h * 0.8
+    c.setFont('Helvetica-Bold', 8)
+    c.drawRightString(right_x, y, 'ORDEN Nº')
+    y -= line_h
 
-    # ============================================================
-    # DATOS DEL CLIENTE
-    # ============================================================
-    y = draw_line_separator(y, 'dashed')
-    y -= line_h * 0.3
-    y = draw_left('DATOS DEL CLIENTE', y, bold=True, size=9)
-    y -= line_h * 0.1
+    # Fila 2: Dirección | Numero Orden
+    c.setFont('Helvetica-Bold', 8)
+    c.drawString(left_x, y, 'Dirección:')
+    c.setFont('Helvetica', 7) # Address smaller
+    addr = resolved_customer.get('short_address') or ''
+    c.drawString(left_x + 14*mm, y, addr[:25])
     
-    client_name = resolved_customer.get('name') or '—'
-    y = draw_left(f'Nombre: {client_name[:35]}', y, size=8)
-    
-    client_doc = resolved_customer.get('document') or '—'
-    y = draw_left(f'RIF/CI: {client_doc}', y, size=8)
-    
-    client_addr = resolved_customer.get('short_address') or '—'
-    if len(client_addr) > 38:
-        y = draw_left(f'Dirección: {client_addr[:38]}', y, size=7)
-        y = draw_left(f'           {client_addr[38:76]}', y, size=7)
-    else:
-        y = draw_left(f'Dirección: {client_addr}', y, size=8)
-    
-    client_phone = resolved_customer.get('phone') or meta.get('telefono_contacto') or '—'
-    y = draw_left(f'Teléfono: {client_phone}', y, size=8)
-    
-    y -= line_h * 0.3
+    c.setFont('Helvetica-Bold', 10)
+    c.drawRightString(right_x, y, order_digits.zfill(6))
+    y -= line_h
 
-    # ============================================================
-    # DETALLE DE PRODUCTOS/SERVICIOS
-    # ============================================================
-    y = draw_line_separator(y, 'solid')
-    y -= line_h * 0.3
-    y = draw_centered('DETALLE DE PRODUCTOS/SERVICIOS', y, bold=True, size=9)
+    # Fila 3: RIF | Fecha
+    c.setFont('Helvetica-Bold', 8)
+    c.drawString(left_x, y, 'R.I.F/C.I:')
+    c.setFont('Helvetica', 8)
+    c.drawString(left_x + 14*mm, y, resolved_customer.get('document') or '')
+    
+    c.setFont('Helvetica', 8)
+    c.drawRightString(right_x, y, datetime.now().strftime("%d/%m/%Y"))
+    y -= line_h
+
+    # Fila 4: Telefono | Hora
+    c.setFont('Helvetica-Bold', 8)
+    c.drawString(left_x, y, 'Teléfono:')
+    c.setFont('Helvetica', 8)
+    c.drawString(left_x + 14*mm, y, resolved_customer.get('phone') or '')
+    
+    c.setFont('Helvetica', 8)
+    c.drawRightString(right_x, y, emission_time)
     y -= line_h * 0.5
+
+    # ============================================================
+    # TABLA ITEMS
+    # ============================================================
+    # Header Line
+    y = draw_line_separator(y, width_line=1.5)
     
-    # Encabezados de tabla
+    # Headers
     c.setFont('Helvetica-Bold', 8)
     col_cant = margin_x + 2
     col_desc = margin_x + 12
-    col_precio = width - margin_x - 24
     col_total = width - margin_x - 2
     
     c.drawString(col_cant, y, 'Cant')
-    c.drawString(col_desc, y, 'Descripción')
-    c.drawRightString(col_precio, y, 'P.Unit Bs')
+    c.drawCentredString(width/2, y, 'Descripción')
     c.drawRightString(col_total, y, 'Total Bs')
     y -= line_h * 0.8
     
-    # Línea bajo encabezados
-    c.setLineWidth(0.5)
-    c.line(margin_x, y + 2, width - margin_x, y + 2)
-    y -= line_h * 0.3
-    
-    # Items
+    # Separator
+    y = draw_line_separator(y, width_line=1.5)
+    y -= line_h * 0.2
+
+    # Items Loop
     c.setFont('Helvetica', 8)
     for desc, qty, amount in item_lines:
         qty_str = f"{int(qty)}" if abs(qty - int(qty)) < 1e-6 else f"{qty:.1f}"
+        
+        lines = _wrap_text(desc, width=35) 
+        
         c.drawString(col_cant, y, qty_str.rjust(3))
-        
-        # Descripción con word wrap si es muy larga
-        if len(desc) > 22:
-            c.drawString(col_desc, y, desc[:22])
-            y -= line_h * 0.7
-            c.setFont('Helvetica', 7)
-            c.drawString(col_desc, y, desc[22:44])
-            c.setFont('Helvetica', 8)
-        else:
-            c.drawString(col_desc, y, desc)
-        
-        unit_bs = amount / qty if qty else 0.0
-        c.drawRightString(col_precio, y, _format_bs(unit_bs))
+        c.drawString(col_desc, y, lines[0] if lines else "")
         c.drawRightString(col_total, y, _format_bs(amount))
+        
         y -= line_h
+        
+        if len(lines) > 1:
+            c.setFont('Helvetica', 7)
+            for extra_line in lines[1:]:
+                c.drawString(col_desc, y, extra_line)
+                y -= line_h * 0.8
+            c.setFont('Helvetica', 8)
+            
+        y -= line_h * 0.3 
     
-    y += line_h * 0.3
-    c.setLineWidth(0.5)
-    c.line(margin_x, y, width - margin_x, y)
-    y -= line_h * 0.8
-
-    # ============================================================
-    # SECCIÓN DE TOTALES
-    # ============================================================
-    # Fondo destacado con borde
-    totals_box_y = y - line_h * 6.2
-    c.setLineWidth(1)
-    c.setStrokeColorRGB(0.3, 0.3, 0.3)
-    draw_box(margin_x, totals_box_y, width - 2*margin_x, line_h * 6.8, fill_color=(0.96, 0.96, 0.96))
-    c.setStrokeColorRGB(0, 0, 0)  # Reset
-    
-    c.setFont('Helvetica', 9)
-    label_x = margin_x + 5
-    value_x = width - margin_x - 3
-    
-    c.drawString(label_x, y, 'Subtotal Bs:')
-    c.drawRightString(value_x, y, _format_bs(items_total_bs))
-    y -= line_h
-    
-    if diseno_bs > 0:
-        c.drawString(label_x, y, 'Diseño Bs:')
-        c.drawRightString(value_x, y, _format_bs(diseno_bs))
-        y -= line_h
-    
-    if instalacion_bs > 0:
-        c.drawString(label_x, y, 'Instalación Bs:')
-        c.drawRightString(value_x, y, _format_bs(instalacion_bs))
-        y -= line_h
-    
-    if iva_amount > 0:
-        c.drawString(label_x, y, 'I.V.A. (16%) Bs:')
-        c.drawRightString(value_x, y, _format_bs(iva_amount))
-        y -= line_h
-    
-    # Línea separadora antes del total
-    y -= line_h * 0.1
-    c.setLineWidth(0.8)
-    c.line(margin_x + 3, y, width - margin_x - 3, y)
-    y -= line_h * 0.6
-    
-    # Total destacado con fondo oscuro
-    total_highlight_y = y - line_h * 0.1
-    draw_box(margin_x + 2, total_highlight_y - 3, width - 2*margin_x - 4, line_h * 2.3, fill_color=(0.15, 0.15, 0.15))
-    
-    c.setFillColorRGB(1, 1, 1)  # Texto blanco
-    c.setFont('Helvetica-Bold', 11)
-    c.drawString(label_x, y, 'TOTAL Bs:')
-    c.drawRightString(value_x, y, _format_bs(total_bs_display))
-    y -= line_h
-    
-    c.setFont('Helvetica-Bold', 10)
-    c.drawString(label_x, y, 'TOTAL USD:')
-    c.drawRightString(value_x, y, f'$ {total_usd:.2f}')
-    c.setFillColorRGB(0, 0, 0)  # Reset a negro
-    
-    y = totals_box_y - line_h * 0.8
-
-    # ============================================================
-    # MÉTODOS DE PAGO
-    # ============================================================
-    y = draw_line_separator(y, 'dashed')
-    y -= line_h * 0.3
-    y = draw_left('MÉTODOS DE PAGO', y, bold=True, size=9)
     y -= line_h * 0.2
+    y = draw_line_separator(y, width_line=1.5)
+    y -= line_h * 0.2
+
+    # ============================================================
+    # TOTALES
+    # ============================================================
+    # M.P. (Metodo Pago)
+    c.setFont('Helvetica-Bold', 8)
+    c.drawString(left_x, y, 'M.P.:')
+    # Draw line under M.P.
+    c.setLineWidth(1)
+    c.line(left_x, y - 2, left_x + 15*mm, y - 2)
     
+    # Totals Right Aligned
+    val_x = width - margin_x
+    lbl_x = val_x - 25*mm
+
     c.setFont('Helvetica', 8)
-    for method, concept, amount in payment_lines:
-        if amount > 0:
-            line_text = f'{method} - {concept}: {_format_bs(amount)}'
-            y = draw_left(line_text[:45], y, size=8)
+    c.drawRightString(lbl_x, y, 'Subtotal')
+    c.drawRightString(val_x, y, _format_bs(items_total_bs))
+    y -= line_h
+
+    if diseno_bs > 0:
+        c.drawRightString(lbl_x, y, 'Diseño')
+        c.drawRightString(val_x, y, _format_bs(diseno_bs))
+        y -= line_h
+
+    if instalacion_bs > 0:
+        c.drawRightString(lbl_x, y, 'Insts.')
+        c.drawRightString(val_x, y, _format_bs(instalacion_bs))
+        y -= line_h
+
+    if iva_amount > 0:
+        c.drawRightString(lbl_x, y, 'I.V.A 16%')
+        c.drawRightString(val_x, y, _format_bs(iva_amount))
+        y -= line_h
+
+    # Separator for Total
+    c.setLineWidth(1)
+    c.line(lbl_x - 5, y + 2, val_x, y + 2)
     
-    y -= line_h * 0.3
+    # Asesor (Left) & Total (Right)
+    c.setFont('Helvetica-Bold', 9)
+    c.drawString(left_x, y, f'ASESOR: {asesor_label[:15]}')
+    # Line under Asesor
+    c.line(left_x, y - 2, left_x + 30*mm, y - 2)
+
+    c.drawRightString(lbl_x, y, 'TOTAL Bs')
+    c.drawRightString(val_x, y, _format_bs(total_bs_display))
+    y -= line_h * 1.5
 
     # ============================================================
-    # OBSERVACIONES
+    # FOOTER
     # ============================================================
-    if description_lines:
-        y = draw_line_separator(y, 'dashed')
-        y -= line_h * 0.3
-        y = draw_left('OBSERVACIONES', y, bold=True, size=9)
-        y -= line_h * 0.2
-        
-        c.setFont('Helvetica', 7)
-        for line in description_lines[:4]:  # Máximo 4 líneas
-            y = draw_left(line[:50], y, size=7)
-        
-        y -= line_h * 0.3
-
-    # ============================================================
-    # PIE DE PÁGINA - TÉRMINOS Y CONDICIONES
-    # ============================================================
-    y = draw_line_separator(y, 'solid')
-    y -= line_h * 0.3
-    
-    # Fondo claro para términos
-    terms_y = y - line_h * 3.5
-    draw_box(margin_x, terms_y, width - 2*margin_x, line_h * 4, fill_color=(0.98, 0.98, 0.98))
+    y = draw_centered('INFORMACION IMPORTANTE', y, size=8, bold=True)
     
     c.setFont('Helvetica', 6)
     footer_lines = [
-        '• Estimado Cliente: Verifique su pedido antes de retirarse.',
-        '• No se realizan devoluciones por compras erróneas.',
-        '• Documento sin validez fiscal. Precios no incluyen I.V.A.',
-        '• Exija su factura fiscal.',
+        'Estimado Cliente: Por favor verifique su pedido antes de retirarse.',
+        'Bajo ningún concepto se realizan devoluciones por compras erróneas.',
     ]
-    
     for line in footer_lines:
         y = draw_centered(line, y, size=6)
     
-    y = terms_y - line_h * 0.8
-    
-    # Separador con línea punteada
-    c.setDash(1, 2)
-    c.setLineWidth(0.3)
-    c.line(margin_x + 10, y, width - margin_x - 10, y)
-    c.setDash()  # Reset
+    y = draw_line_separator(y, width_line=1.5)
+    y = draw_centered('Este Documento no da derecho a crédito fiscal. Nuestros precios no incluyen I.V.A', y, size=6, bold=True)
     y -= line_h * 0.5
     
-    # Info del asesor y hora
-    if asesor_label:
-        c.setFont('Helvetica-Bold', 7)
-        y = draw_centered(f'Atendido por: {asesor_label}', y, size=7, bold=True)
-    
-    c.setFont('Helvetica', 6)
-    y = draw_centered(f'Emisión: {datetime.now().strftime("%d/%m/%Y")} a las {emission_time}', y, size=6)
-    
-    # Mensaje de agradecimiento
+    y = draw_centered('EXIJA SU FACTURA FISCAL', y, size=7)
     y -= line_h * 0.5
-    c.setFont('Helvetica-Bold', 9)
-    y = draw_centered('¡GRACIAS POR SU PREFERENCIA!', y, size=9, bold=True)
-    
-    # Marco decorativo inferior
-    y -= line_h * 0.3
-    c.setLineWidth(2)
-    c.line(margin_x, margin_y + 3, width - margin_x, margin_y + 3)
-    c.setLineWidth(0.5)
-    c.line(margin_x, margin_y + 1, width - margin_x, margin_y + 1)
 
-    # Guardar PDF
+    # ABONO / POR COBRAR
+    abono_val = sale_info.get('abono_usd', 0.0)
+    restante_val = sale_info.get('restante', 0.0)
+    
+    footer_text = f"ABONO $ {abono_val:.2f} POR COBRAR $ {restante_val:.2f}"
+    y = draw_centered(footer_text, y, size=11, bold=True)
+
+    c.showPage()
     c.save()
     (out.with_suffix('.json')).write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding='utf-8')
     return out
@@ -853,6 +778,10 @@ def print_ticket_excel_pdf(order_info: dict, output_path: Path = None) -> Path:
     if order_info.get('advisor'):
         ws['C18'] = order_info['advisor']
         
+    # A24: Estado de Pago (PAGO TOTAL o ABONO/RESTANTE)
+    if order_info.get('payment_status_text'):
+        ws['A24'] = order_info['payment_status_text']
+        
     wb.save(temp_excel)
     wb.close()
     
@@ -874,6 +803,7 @@ def print_ticket_excel_pdf(order_info: dict, output_path: Path = None) -> Path:
 def _excel_to_pdf(excel_path: Path, pdf_path: Path):
     import win32com.client
     import pythoncom
+    import win32print
     
     pythoncom.CoInitialize()
     
@@ -882,7 +812,68 @@ def _excel_to_pdf(excel_path: Path, pdf_path: Path):
     excel.DisplayAlerts = False
     
     try:
+        # Intentar cambiar a una impresora que soporte Carta (Microsoft Print to PDF)
+        # Esto evita que Excel use la configuración de la impresora térmica (80mm)
+        target_printer = "Microsoft Print to PDF"
+        printer_set = False
+        
+        try:
+            printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+            for p in printers:
+                name = p[2]
+                if name == target_printer:
+                    handle = win32print.OpenPrinter(name)
+                    info = win32print.GetPrinter(handle, 2)
+                    win32print.ClosePrinter(handle)
+                    port = info['pPortName']
+                    
+                    # Excel necesita "Nombre en Puerto"
+                    # Probamos formatos comunes
+                    candidates = [
+                        f"{name} on {port}",
+                        f"{name} on {port.rstrip(':')}:",
+                        name
+                    ]
+                    
+                    for c in candidates:
+                        try:
+                            excel.ActivePrinter = c
+                            printer_set = True
+                            break
+                        except:
+                            continue
+                    if printer_set:
+                        break
+        except Exception:
+            pass # Si falla, seguimos con la impresora por defecto
+
         wb = excel.Workbooks.Open(str(excel_path.resolve()))
+        
+        # Forzar configuración de página vía COM
+        ws = wb.ActiveSheet
+        try:
+            # xlPaperLetter = 1
+            ws.PageSetup.PaperSize = 1 
+            # xlLandscape = 2
+            ws.PageSetup.Orientation = 2
+            # Zoom = False para permitir FitToPages
+            ws.PageSetup.Zoom = False
+            ws.PageSetup.FitToPagesWide = 1
+            ws.PageSetup.FitToPagesTall = 1
+            
+            # Márgenes (en puntos, 1 cm ~= 28.35 pt)
+            # 0.1 cm ~= 3 pt
+            ws.PageSetup.LeftMargin = 3
+            ws.PageSetup.RightMargin = 3
+            ws.PageSetup.TopMargin = 3
+            ws.PageSetup.BottomMargin = 3
+            ws.PageSetup.HeaderMargin = 0
+            ws.PageSetup.FooterMargin = 0
+            ws.PageSetup.CenterHorizontally = True
+            
+        except Exception:
+            pass
+
         # ExportAsFixedFormat 0 = xlTypePDF
         wb.ExportAsFixedFormat(0, str(pdf_path.resolve()))
         wb.Close(False)
@@ -890,3 +881,295 @@ def _excel_to_pdf(excel_path: Path, pdf_path: Path):
         raise e
     finally:
         excel.Quit()
+
+
+def print_daily_report_excel_pdf(sales_data: list[dict], report_date: datetime) -> Path:
+    """
+    Genera un reporte diario en PDF usando la plantilla Excel.
+    Nueva implementación optimizada para paginación correcta.
+    """
+    import openpyxl
+    import shutil
+    from copy import copy
+    
+    template_path = Path.cwd() / "Formato Recibo" / "FORMATO DE INGRESOS DIARIOS.xlsx"
+    if not template_path.exists():
+        raise FileNotFoundError(f"No se encontró la plantilla en: {template_path}")
+        
+    # Crear archivo temporal
+    temp_excel = _data_dir() / f"temp_report_{int(datetime.now().timestamp())}.xlsx"
+    shutil.copy2(template_path, temp_excel)
+    
+    wb = openpyxl.load_workbook(temp_excel)
+    ws = wb.active
+    
+    # 1. Configuración de Página (CRÍTICO para que salga en 1 hoja)
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.paperSize = 1  # Letter / Carta
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.page_setup.scale = None  # Importante: desactivar escala manual
+    
+    # Márgenes mínimos
+    ws.page_margins.left = 0.1
+    ws.page_margins.right = 0.1
+    ws.page_margins.top = 0.1
+    ws.page_margins.bottom = 0.1
+    ws.page_margins.header = 0.0
+    ws.page_margins.footer = 0.0
+    
+    ws.print_options.horizontalCentered = True
+    
+    # Limpiar saltos de página manuales de la plantilla
+    try:
+        # openpyxl RowBreak object doesn't have clear(), access internal list if needed
+        if hasattr(ws, 'row_breaks') and hasattr(ws.row_breaks, 'brk'):
+            ws.row_breaks.brk = []
+        if hasattr(ws, 'col_breaks') and hasattr(ws.col_breaks, 'brk'):
+            ws.col_breaks.brk = []
+    except Exception:
+        pass
+
+    # 2. Llenar Fecha del Reporte (Sobrescribir fórmulas TODAY())
+    # Según inspección: O4=Día, P4=Mes, Q4=Año
+    ws['O4'] = report_date.day
+    ws['P4'] = report_date.month
+    ws['Q4'] = report_date.year
+
+    # 3. Gestión de Filas Dinámicas
+    # La plantilla tiene espacio para 2 ventas (filas 8 y 9).
+    # Si hay más, insertamos filas entre la 8 y la 9.
+    start_row = 8
+    num_sales = len(sales_data)
+    
+    if num_sales > 2:
+        rows_to_add = num_sales - 2
+        # Insertar antes de la fila 9 (la segunda fila de datos original)
+        ws.insert_rows(9, amount=rows_to_add)
+        
+        # Copiar estilos de la fila 8 a las nuevas filas
+        for r_idx in range(9, 9 + rows_to_add):
+            for c_idx in range(1, 20): # Columnas A-S
+                source = ws.cell(row=8, column=c_idx)
+                target = ws.cell(row=r_idx, column=c_idx)
+                if source.has_style:
+                    target.font = copy(source.font)
+                    target.border = copy(source.border)
+                    target.fill = copy(source.fill)
+                    target.number_format = copy(source.number_format)
+                    target.alignment = copy(source.alignment)
+                    target.protection = copy(source.protection)
+
+    # 4. Llenar Datos
+    for i, sale in enumerate(sales_data):
+        row = start_row + i
+        
+        # Mapeo de columnas
+        ws[f'A{row}'] = sale.get('numero_orden', '')
+        ws[f'B{row}'] = sale.get('articulo', '')
+        ws[f'C{row}'] = sale.get('asesor', '')
+        ws[f'D{row}'] = sale.get('venta_usd', 0.0)
+        ws[f'E{row}'] = sale.get('forma_pago', '')
+        ws[f'F{row}'] = sale.get('serial_billete', '')
+        ws[f'G{row}'] = sale.get('banco', '')
+        ws[f'H{row}'] = sale.get('referencia', '')
+        
+        # Fecha pago
+        fp = sale.get('fecha_pago')
+        ws[f'I{row}'] = str(fp)[:10] if fp else ''
+        
+        ws[f'J{row}'] = sale.get('monto_bs', 0.0)
+        ws[f'K{row}'] = sale.get('monto_usd_calculado', 0.0)
+        ws[f'L{row}'] = sale.get('abono_usd', 0.0)
+        ws[f'M{row}'] = "" # Restante $ (Placeholder para cobros futuros)
+        ws[f'N{row}'] = sale.get('iva', 0.0)
+        ws[f'O{row}'] = sale.get('restante', 0.0) # Por cobrar
+        ws[f'P{row}'] = sale.get('diseno_usd', 0.0)
+        ws[f'Q{row}'] = 0.0 # Instalación
+        ws[f'S{row}'] = sale.get('ingresos_usd', 0.0)
+
+    # 5. Definir Área de Impresión
+    # Desde A1 hasta la última fila con contenido (incluyendo firmas)
+    ws.print_area = f'A1:S{ws.max_row}'
+    
+    wb.save(temp_excel)
+    wb.close()
+    
+    # 6. Convertir a PDF
+    output_path = _data_dir() / f"Reporte_Diario_{report_date.strftime('%Y-%m-%d')}.pdf"
+    _excel_to_pdf(temp_excel, output_path)
+    
+    try:
+        os.remove(temp_excel)
+    except:
+        pass
+        
+    return output_path
+
+def _print_daily_report_excel_pdf_old(sales_data: list[dict], report_date: datetime) -> Path:
+    """Genera un reporte diario en PDF usando la plantilla Excel."""
+    import openpyxl
+    import shutil
+    
+    template_path = Path.cwd() / "Formato Recibo" / "FORMATO DE INGRESOS DIARIOS.xlsx"
+    if not template_path.exists():
+        raise FileNotFoundError(f"No se encontró la plantilla en: {template_path}")
+        
+    # Crear temporal
+    temp_excel = _data_dir() / f"temp_report_{int(datetime.now().timestamp())}.xlsx"
+    shutil.copy2(template_path, temp_excel)
+    
+    wb = openpyxl.load_workbook(temp_excel)
+    ws = wb.active
+    
+    # Configuración de página según captura (Carta, Horizontal)
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.paperSize = 1  # Carta / Letter (1 = Letter, 9 = A4)
+    
+    # FORZAR AJUSTE A UNA PÁGINA
+    # Aunque la captura muestra 100%, si el contenido es más ancho/alto que la página, se dividirá.
+    # Para garantizar 1 sola página, usamos fitToPage.
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.page_setup.scale = None # Desactivar escala manual para que fitToPage funcione
+    
+    # Márgenes según captura
+    ws.page_margins.top = 0.1
+    ws.page_margins.bottom = 0.1
+    ws.page_margins.left = 0.1
+    ws.page_margins.right = 0.0
+    ws.page_margins.header = 0.1
+    ws.page_margins.footer = 0.1
+    
+    # Centrar horizontalmente
+    ws.print_options.horizontalCentered = True
+    
+    # Eliminar saltos de página existentes que puedan causar división
+    try:
+        # En versiones recientes de openpyxl, se usa row_breaks y col_breaks
+        if hasattr(ws, 'row_breaks'):
+            ws.row_breaks.clear()
+        if hasattr(ws, 'col_breaks'):
+            ws.col_breaks.clear()
+    except Exception:
+        pass
+    
+    # Llenar fecha del reporte (asumiendo que hay un lugar para ello, si no, lo ignoramos o lo ponemos en A1)
+    # El usuario no especificó celda para fecha del reporte, pero es buena práctica.
+    # Revisando instrucciones: "el orden de los datos son a partir de la fila 8"
+    # Asumiremos que la fecha puede ir en el título o similar, pero sin instrucción específica, solo llenamos la tabla.
+    
+    start_row = 8
+    from copy import copy
+    
+    # Función helper para copiar estilos
+    def copy_style(source_cell, target_cell):
+        if source_cell.has_style:
+            target_cell.font = copy(source_cell.font)
+            target_cell.border = copy(source_cell.border)
+            target_cell.fill = copy(source_cell.fill)
+            target_cell.number_format = copy(source_cell.number_format)
+            target_cell.protection = copy(source_cell.protection)
+            target_cell.alignment = copy(source_cell.alignment)
+
+    # Lógica de inserción de filas:
+    # La plantilla tiene 2 filas de datos predefinidas (8 y 9).
+    # Si hay más de 2 ventas, insertamos filas adicionales ENTRE la 8 y la 9 para expandir el rango de suma.
+    num_sales = len(sales_data)
+    if num_sales > 2:
+        rows_to_insert = num_sales - 2
+        # Insertar en la fila 9. Esto empuja la fila 9 original hacia abajo.
+        # El rango de suma D8:D9 se expandirá automáticamente.
+        ws.insert_rows(9, amount=rows_to_insert)
+        
+        # Copiar estilos de la fila 8 a las nuevas filas insertadas
+        for r in range(9, 9 + rows_to_insert):
+            for col in range(1, 20): # A hasta S
+                source_cell = ws.cell(row=8, column=col)
+                target_cell = ws.cell(row=r, column=col)
+                copy_style(source_cell, target_cell)
+
+    # Llenar datos
+    for i, sale in enumerate(sales_data):
+        row = start_row + i
+        
+        # A: Numero de orden
+        ws[f'A{row}'] = sale.get('numero_orden', '')
+        
+        # B: Producto
+        ws[f'B{row}'] = sale.get('articulo', '')
+        
+        # C: Asesor
+        ws[f'C{row}'] = sale.get('asesor', '')
+        
+        # D: Venta $
+        ws[f'D{row}'] = sale.get('venta_usd', 0.0)
+        
+        # E: Forma de pago
+        ws[f'E{row}'] = sale.get('forma_pago', '')
+        
+        # F: Serial del billete
+        ws[f'F{row}'] = sale.get('serial_billete', '')
+        
+        # G: Banco
+        ws[f'G{row}'] = sale.get('banco', '')
+        
+        # H: Referencia bancaria
+        ws[f'H{row}'] = sale.get('referencia', '')
+        
+        # I: Fecha de pago
+        fecha_pago = sale.get('fecha_pago')
+        if fecha_pago:
+            # Si es string ISO, cortar fecha
+            if isinstance(fecha_pago, str):
+                ws[f'I{row}'] = fecha_pago[:10]
+            else:
+                ws[f'I{row}'] = str(fecha_pago)
+        
+        # J: Monto Bs
+        ws[f'J{row}'] = sale.get('monto_bs', 0.0)
+        
+        # K: Monto $ (Calculado)
+        ws[f'K{row}'] = sale.get('monto_usd_calculado', 0.0)
+        
+        # L: Abono $
+        ws[f'L{row}'] = sale.get('abono_usd', 0.0)
+        
+        # M: Restante $
+        ws[f'M{row}'] = sale.get('restante', 0.0)
+        
+        # N: IVA
+        ws[f'N{row}'] = sale.get('iva', 0.0)
+        
+        # O: Por Cobrar $ (Asumimos Restante)
+        ws[f'O{row}'] = sale.get('restante', 0.0)
+        
+        # P: Diseño
+        ws[f'P{row}'] = sale.get('diseno_usd', 0.0)
+        
+        # Q: Inst (Instalación - No tenemos campo, ponemos 0)
+        ws[f'Q{row}'] = 0.0
+        
+        # S: Ingresos $ (Saltamos R)
+        ws[f'S{row}'] = sale.get('ingresos_usd', 0.0)
+        
+    # Definir área de impresión: Todo el contenido hasta la última fila usada
+    # Esto asegura que se incluyan los totales y firmas, sin cortar nada.
+    ws.print_area = f'A1:S{ws.max_row}'
+        
+    wb.save(temp_excel)
+    wb.close()
+    
+    # Generar PDF
+    output_path = _data_dir() / f"Reporte_Diario_{report_date.strftime('%Y-%m-%d')}.pdf"
+    _excel_to_pdf(temp_excel, output_path)
+    
+    # Limpiar
+    try:
+        os.remove(temp_excel)
+    except:
+        pass
+        
+    return output_path

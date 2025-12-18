@@ -94,9 +94,11 @@ class UserDialog(QDialog):
             with self.session_factory() as session:
                 workers = list_workers(session, active_only=True)
                 for w in workers:
-                    # Mostrar si ya tiene usuario
+                    # Mostrar si ya tiene usuario activo
                     text = w.full_name
-                    if w.user_id:
+                    # Verificar si tiene usuario Y si ese usuario está activo
+                    # Nota: w.user dispara una carga lazy, requiere session activa
+                    if w.user_id and w.user and w.user.is_active:
                         text += " (Tiene usuario)"
                     self.worker_combo.addItem(text, w.id)
         except Exception as e:

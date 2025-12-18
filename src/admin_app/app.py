@@ -27,6 +27,7 @@ from .ui.daily_reports_view import DailyReportsView
 from .ui.config_view import ConfigView
 from .ui.simple_products_view import SimpleProductsView
 from .ui.workers_view import WorkersView
+from .ui.pending_payments_view import PendingPaymentsView
 ## Módulo ParametrosMaterialesView eliminado (consolidado en Productos)
 ## Módulo antiguo de producto eliminado
 ## Se eliminaron las siguientes importaciones:
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         self._orders_view = OrdersView(self._session_factory, current_user=self._current_user)
         self._workers_view = WorkersView(self._session_factory)
         self._config_view = ConfigView(self._session_factory)
+        self._pending_payments_view = PendingPaymentsView(self._session_factory)
 
         self._stack.addWidget(self._home_view)           # 0
         self._stack.addWidget(self._customers_view)      # 1
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._orders_view)         # 5
         self._stack.addWidget(self._workers_view)        # 6 (antes 6 era config)
         self._stack.addWidget(self._config_view)         # 7
+        self._stack.addWidget(self._pending_payments_view) # 8
 
         self.setCentralWidget(container)
 
@@ -227,7 +230,7 @@ class MainWindow(QMainWindow):
         )
 
     def _update_window_title(self) -> None:
-        base = "Sistema-Admin 2.0"
+        base = "Sistema-Admin 2.0.2.1"
         user = self._current_user or "—"
         self.setWindowTitle(f"{base} — {user}")
 
@@ -307,6 +310,7 @@ class MainWindow(QMainWindow):
             "pedidos": 5,
             "trabajadores": 6,
             "configuracion": 7,
+            "cuentas_por_cobrar": 8,
         }
         self._stack.setCurrentIndex(index_map.get(module_key, 0))
         
@@ -325,6 +329,8 @@ class MainWindow(QMainWindow):
             self._workers_view.refresh()
         elif module_key == "configuracion":
             self._config_view.refresh()
+        elif module_key == "cuentas_por_cobrar":
+            self._pending_payments_view.refresh()
 
 
 def create_qt_app():

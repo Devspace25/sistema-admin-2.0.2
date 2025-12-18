@@ -44,7 +44,7 @@ if ($WithMigrator) {
 
 # Copiar .env.example junto al ejecutable para facilitar configuración en clientes
 $distDir = Join-Path $proj 'dist'
-$exePath = Join-Path $distDir 'Sistema-Admin-2.0.exe'
+$exePath = Join-Path $distDir 'Sistema-Admin-2.0.2.1.exe'
 $envExample = Join-Path $proj '.env.example'
 if (Test-Path $envExample) {
   Copy-Item $envExample (Join-Path $distDir '.env.example') -Force

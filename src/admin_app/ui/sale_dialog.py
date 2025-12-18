@@ -363,21 +363,22 @@ class SaleDialog(QDialog):
         
         # Table
         self.tbl_product_lines = QTableWidget(self)
-        self.tbl_product_lines.setColumnCount(7)
+        self.tbl_product_lines.setColumnCount(8)
         self.tbl_product_lines.setHorizontalHeaderLabels([
-            "Producto", "Cant.", "Precio $ Unit.", "Precio Bs Unit.", "Total Bs", "", ""
+            "Producto", "Descripción", "Cant.", "Precio $ Unit.", "Precio Bs Unit.", "Total Bs", "", ""
         ])
         # Adjust column widths
         header = self.tbl_product_lines.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch) # Product
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents) # Cant
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents) # Price $
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents) # Price Bs
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Total Bs
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed) # Settings
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed) # Delete
-        self.tbl_product_lines.setColumnWidth(5, 30)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents) # Product
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch) # Description
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents) # Cant
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents) # Price $
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Price Bs
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents) # Total Bs
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed) # Settings
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed) # Delete
         self.tbl_product_lines.setColumnWidth(6, 30)
+        self.tbl_product_lines.setColumnWidth(7, 30)
         
         self.tbl_product_lines.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tbl_product_lines.setMinimumHeight(150)
@@ -401,41 +402,46 @@ class SaleDialog(QDialog):
             for p in self._cached_products:
                 cmb_product.addItem(p.get('name'), int(p.get('id')))
         self.tbl_product_lines.setCellWidget(row, 0, cmb_product)
+
+        # 1. Descripción (QLineEdit)
+        edt_desc = QLineEdit(self)
+        edt_desc.setPlaceholderText("Detalles...")
+        self.tbl_product_lines.setCellWidget(row, 1, edt_desc)
         
-        # 1. Cantidad
+        # 2. Cantidad
         edt_cant = MoneySpinBox(self)
         self._conf_money(edt_cant, prefix="", maxv=9999.0)
         edt_cant.setDecimals(2)
         edt_cant.setValue(1.00)
-        self.tbl_product_lines.setCellWidget(row, 1, edt_cant)
+        self.tbl_product_lines.setCellWidget(row, 2, edt_cant)
         
-        # 2. Precio $ Unit
+        # 3. Precio $ Unit
         edt_price_usd = MoneySpinBox(self)
         self._conf_money(edt_price_usd, prefix="", maxv=999999.99)
-        self.tbl_product_lines.setCellWidget(row, 2, edt_price_usd)
+        self.tbl_product_lines.setCellWidget(row, 3, edt_price_usd)
         
-        # 3. Precio Bs Unit
+        # 4. Precio Bs Unit
         edt_price_bs = MoneySpinBox(self)
         self._conf_money(edt_price_bs, prefix="", maxv=999999999.99)
-        self.tbl_product_lines.setCellWidget(row, 3, edt_price_bs)
+        self.tbl_product_lines.setCellWidget(row, 4, edt_price_bs)
         
-        # 4. Total Bs
+        # 5. Total Bs
         edt_total_bs = QDoubleSpinBox(self)
         self._conf_money(edt_total_bs, prefix="", maxv=999999999.99)
         edt_total_bs.setReadOnly(True)
         edt_total_bs.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.tbl_product_lines.setCellWidget(row, 4, edt_total_bs)
+        self.tbl_product_lines.setCellWidget(row, 5, edt_total_bs)
         
-        # 5. Settings Button
+        # 6. Settings Button
         btn_settings = QPushButton("⚙", self)
         btn_settings.setFixedSize(24, 24)
-        self.tbl_product_lines.setCellWidget(row, 5, btn_settings)
+        self.tbl_product_lines.setCellWidget(row, 6, btn_settings)
         
-        # 6. Delete Button
+        # 7. Delete Button
         btn_delete = QPushButton("❌", self)
         btn_delete.setFixedSize(24, 24)
         btn_delete.setStyleSheet("color: red;")
-        self.tbl_product_lines.setCellWidget(row, 6, btn_delete)
+        self.tbl_product_lines.setCellWidget(row, 7, btn_delete)
         
         # Ensure there is an item in col 0 to store payload data
         if not self.tbl_product_lines.item(row, 0):
@@ -455,26 +461,89 @@ class SaleDialog(QDialog):
         if row >= 0:
             self.tbl_product_lines.removeRow(row)
             self._update_totals()
+            self._rebuild_main_description()
             
     def _on_delete_line_row(self, btn: QPushButton) -> None:
         # Find the row containing this button
         for r in range(self.tbl_product_lines.rowCount()):
-            if self.tbl_product_lines.cellWidget(r, 6) == btn:
+            if self.tbl_product_lines.cellWidget(r, 7) == btn:
                 self.tbl_product_lines.removeRow(r)
                 self._update_totals()
+                self._rebuild_main_description()
                 break
 
     def _on_line_product_changed(self, cmb: QComboBox) -> None:
-        # Logic to handle product selection (e.g. set default price)
-        prod_name = cmb.currentText()
-        if prod_name and not prod_name.startswith('----'):
-            self.edt_descripcion.setText(prod_name)
+        # Find row
+        row = -1
+        for r in range(self.tbl_product_lines.rowCount()):
+            if self.tbl_product_lines.cellWidget(r, 0) == cmb:
+                row = r
+                break
+        
+        if row == -1:
+            return
+
+        # Get product ID
+        prod_id = cmb.currentData()
+        
+        # Find product in cache
+        desc_text = ""
+        if isinstance(prod_id, int) and hasattr(self, '_cached_products'):
+            for p in self._cached_products:
+                if p.get('id') == prod_id:
+                    # Prefer description, fallback to name
+                    desc_text = p.get('description') or p.get('name') or ""
+                    break
+        
+        # Fallback to current text if no ID (shouldn't happen for valid products)
+        if not desc_text:
+            txt = cmb.currentText()
+            if txt and not txt.startswith('----'):
+                desc_text = txt
+
+        # Update description widget (col 1)
+        edt_desc = self.tbl_product_lines.cellWidget(row, 1)
+        if edt_desc:
+             edt_desc.setText(desc_text)
+
+        self._rebuild_main_description()
+
+    def _rebuild_main_description(self) -> None:
+        descriptions = []
+        for r in range(self.tbl_product_lines.rowCount()):
+            # Get item data
+            item = self.tbl_product_lines.item(r, 0)
+            data = item.data(Qt.UserRole) if item else None
+            
+            desc = ""
+            # Try to get from data
+            if isinstance(data, dict):
+                # Generic
+                if 'summary' in data and isinstance(data['summary'], dict):
+                    desc = data['summary'].get('descripcion', '')
+                # Talonario / Corporeo (stored manually)
+                if not desc and 'description_summary' in data:
+                     desc = data['description_summary']
+                
+            # Fallback to product name
+            if not desc:
+                cmb = self.tbl_product_lines.cellWidget(r, 0)
+                if cmb:
+                    txt = cmb.currentText()
+                    if txt and not txt.startswith('----'):
+                        desc = txt
+            
+            if desc:
+                descriptions.append(desc)
+        
+        full_desc = " + ".join(descriptions)
+        self.edt_descripcion.setText(full_desc)
 
     def _on_configure_line_product(self, btn: QPushButton) -> None:
         # Find row
         row = -1
         for r in range(self.tbl_product_lines.rowCount()):
-            if self.tbl_product_lines.cellWidget(r, 5) == btn:
+            if self.tbl_product_lines.cellWidget(r, 6) == btn:
                 row = r
                 break
         if row == -1:
@@ -530,21 +599,26 @@ class SaleDialog(QDialog):
                             config_data = dlg.get_config_data()
                             
                             # Update row fields
-                            edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
-                            # edt_cant = self.tbl_product_lines.cellWidget(row, 1) # Not used here
+                            edt_price_usd = self.tbl_product_lines.cellWidget(row, 3)
+                            # edt_cant = self.tbl_product_lines.cellWidget(row, 2) # Not used here
                             
                             if total_usd > 0.0:
                                 edt_price_usd.setValue(total_usd)
                             
                             # Update main description
                             desc = summary.get('descripcion', '')
-                            if desc:
-                                self.edt_descripcion.setText(desc)
+                            
+                            # Update row description
+                            edt_desc = self.tbl_product_lines.cellWidget(row, 1)
+                            if edt_desc and desc:
+                                edt_desc.setText(desc)
                             
                             # Store payload
                             payload = {'selections': config_data, 'summary': summary}
                             if item:
                                 item.setData(Qt.UserRole, payload)
+                            
+                            self._rebuild_main_description()
                         return
             except Exception:
                 pass
@@ -608,17 +682,29 @@ class SaleDialog(QDialog):
                 payload = dlg.get_full_payload()
                 
                 # Update row
-                edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
+                edt_price_usd = self.tbl_product_lines.cellWidget(row, 3)
                 if final_price > 0.0:
                     edt_price_usd.setValue(final_price)
                     
                 # Update main description
+                desc_summary = ""
                 if hasattr(dlg, 'build_config_summary'):
-                    self.edt_descripcion.setText(dlg.build_config_summary())
+                    desc_summary = dlg.build_config_summary()
+                    # self.edt_descripcion.setText(desc_summary)
+                
+                # Update row description
+                edt_desc = self.tbl_product_lines.cellWidget(row, 1)
+                if edt_desc and desc_summary:
+                    edt_desc.setText(desc_summary)
                     
                 # Store payload
+                if isinstance(payload, dict):
+                    payload['description_summary'] = desc_summary
+                
                 if item:
                     item.setData(Qt.UserRole, payload)
+                
+                self._rebuild_main_description()
                     
         except Exception as e:
             QMessageBox.critical(self, "Configurar", f"Error: {e}")
@@ -652,20 +738,32 @@ class SaleDialog(QDialog):
                 data = dlg.accepted_data
                 if data:
                     total = float(data.get('precio_total', 0.0))
-                    edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
-                    edt_cant = self.tbl_product_lines.cellWidget(row, 1)
+                    edt_price_usd = self.tbl_product_lines.cellWidget(row, 3)
+                    edt_cant = self.tbl_product_lines.cellWidget(row, 2)
                     
                     if total > 0.0:
                         edt_price_usd.setValue(total)
                         
                     # Update main description
+                    desc_summary = ""
                     if hasattr(dlg, 'build_config_summary'):
-                        self.edt_descripcion.setText(dlg.build_config_summary())
+                        desc_summary = dlg.build_config_summary()
+                        # self.edt_descripcion.setText(desc_summary)
+                    
+                    # Update row description
+                    edt_desc = self.tbl_product_lines.cellWidget(row, 1)
+                    if edt_desc and desc_summary:
+                        edt_desc.setText(desc_summary)
                         
                     # Store payload
+                    if isinstance(data, dict):
+                        data['description_summary'] = desc_summary
+
                     item = self.tbl_product_lines.item(row, 0)
                     if item:
                         item.setData(Qt.UserRole, data)
+                    
+                    self._rebuild_main_description()
                         
         except Exception as e:
             QMessageBox.critical(self, "Configurar", f"Error: {e}")
@@ -674,19 +772,19 @@ class SaleDialog(QDialog):
         # Find row
         row = -1
         for r in range(self.tbl_product_lines.rowCount()):
-            if (self.tbl_product_lines.cellWidget(r, 1) == sender_widget or
-                self.tbl_product_lines.cellWidget(r, 2) == sender_widget or
-                self.tbl_product_lines.cellWidget(r, 3) == sender_widget):
+            if (self.tbl_product_lines.cellWidget(r, 2) == sender_widget or
+                self.tbl_product_lines.cellWidget(r, 3) == sender_widget or
+                self.tbl_product_lines.cellWidget(r, 4) == sender_widget):
                 row = r
                 break
         
         if row == -1:
             return
             
-        edt_cant = self.tbl_product_lines.cellWidget(row, 1)
-        edt_price_usd = self.tbl_product_lines.cellWidget(row, 2)
-        edt_price_bs = self.tbl_product_lines.cellWidget(row, 3)
-        edt_total_bs = self.tbl_product_lines.cellWidget(row, 4)
+        edt_cant = self.tbl_product_lines.cellWidget(row, 2)
+        edt_price_usd = self.tbl_product_lines.cellWidget(row, 3)
+        edt_price_bs = self.tbl_product_lines.cellWidget(row, 4)
+        edt_total_bs = self.tbl_product_lines.cellWidget(row, 5)
         
         if not (edt_cant and edt_price_usd and edt_price_bs and edt_total_bs):
             return
@@ -1526,8 +1624,8 @@ class SaleDialog(QDialog):
             # Sumar items (New Product Lines table)
             if hasattr(self, 'tbl_product_lines'):
                 for r in range(self.tbl_product_lines.rowCount()):
-                    w_cant = self.tbl_product_lines.cellWidget(r, 1)
-                    w_price = self.tbl_product_lines.cellWidget(r, 2)
+                    w_cant = self.tbl_product_lines.cellWidget(r, 2)
+                    w_price = self.tbl_product_lines.cellWidget(r, 3)
                     if w_cant and w_price:
                         subtotal_usd += w_cant.value() * w_price.value()
 
@@ -1592,10 +1690,11 @@ class SaleDialog(QDialog):
             if hasattr(self, 'tbl_product_lines'):
                 for r in range(self.tbl_product_lines.rowCount()):
                     cmb_prod = self.tbl_product_lines.cellWidget(r, 0)
-                    w_cant = self.tbl_product_lines.cellWidget(r, 1)
-                    w_price_usd = self.tbl_product_lines.cellWidget(r, 2)
-                    w_price_bs = self.tbl_product_lines.cellWidget(r, 3)
-                    w_total_bs = self.tbl_product_lines.cellWidget(r, 4)
+                    w_desc = self.tbl_product_lines.cellWidget(r, 1)
+                    w_cant = self.tbl_product_lines.cellWidget(r, 2)
+                    w_price_usd = self.tbl_product_lines.cellWidget(r, 3)
+                    w_price_bs = self.tbl_product_lines.cellWidget(r, 4)
+                    w_total_bs = self.tbl_product_lines.cellWidget(r, 5)
                     
                     if not (cmb_prod and w_cant and w_price_usd):
                         continue
@@ -1618,7 +1717,8 @@ class SaleDialog(QDialog):
                         'unit_price': price_usd,
                         'total_price': total_usd,
                         'total_bs': w_total_bs.value() if w_total_bs else 0.0,
-                        'details': payload or {}
+                        'details': payload or {},
+                        'descripcion': w_desc.text() if w_desc else ""
                     })
             
             # Fallback to legacy _items_data if new table is empty (just in case)

@@ -99,7 +99,7 @@ class CustomersView(QWidget):
         self.search_edit.textChanged.connect(self._apply_filter)
         
         self.filter_document = QComboBox(self)
-        self.filter_document.addItems(["Todos", "V-", "J-", "E-"])
+        self.filter_document.addItems(["Todos", "V-", "J-", "E-", "G-"])
         self.filter_document.setToolTip("Filtrar por tipo de documento")
         self.filter_document.currentTextChanged.connect(self._apply_filter)
         
@@ -269,11 +269,8 @@ class CustomersView(QWidget):
                     doc_item = self._table.item(row, 3)
                     if doc_item and doc_item.text():
                         doc_text = doc_item.text().upper().strip()
-                        doc_match = (
-                            (doc_filter == "V- (Venezolano)" and doc_text.startswith('V-')) or
-                            (doc_filter == "J- (Jurídico)" and doc_text.startswith('J-')) or
-                            (doc_filter == "E- (Extranjero)" and doc_text.startswith('E-'))
-                        )
+                        # Usar startswith directamente ya que el filtro es "V-", "J-", etc.
+                        doc_match = doc_text.startswith(doc_filter.upper())
                     else:
                         doc_match = False
                 

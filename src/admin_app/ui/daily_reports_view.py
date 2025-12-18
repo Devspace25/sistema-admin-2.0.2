@@ -6,16 +6,17 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QPushButton, QLabel, QMessageBox, QDialog, QFormLayout,
     QTextEdit, QDateEdit, QGroupBox, QDialogButtonBox, QFrame, QScrollArea,
-    QApplication, QTabWidget, QToolButton
+    QApplication, QTabWidget, QToolButton, QCheckBox, QGridLayout
 )
 from PySide6.QtCore import Qt, QDate, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor
 
 from ..db import make_session_factory, make_engine
 from ..repository import (
     check_daily_report_status, get_daily_sales_data, create_daily_report,
     get_pending_reports, list_daily_reports
 )
+from ..receipts import print_daily_report_excel_pdf
 
 
 class DailyReportsView(QWidget):
@@ -85,19 +86,44 @@ class DailyReportsView(QWidget):
 
             layout.addWidget(info_group)
         
-        alerts_group = QGroupBox("⚠️ Reportes Pendientes")
-        alerts_layout = QVBoxLayout(alerts_group)
+        self.alerts_group = QGroupBox("⚠️ Reportes Pendientes")
+        self.alerts_group_layout = QVBoxLayout(self.alerts_group)
+        self.alerts_group_layout.setContentsMargins(10, 15, 10, 10)
         
+        # 1. Widget para cuando NO hay alertas (Compacto)
+        self.no_alerts_widget = QWidget()
+        no_alerts_layout = QHBoxLayout(self.no_alerts_widget)
+        no_alerts_layout.setContentsMargins(0, 0, 0, 0)
+        
+        lbl_icon = QLabel("✅")
+        lbl_icon.setStyleSheet("font-size: 14px;")
+        lbl_msg = QLabel("Todo al día. No hay reportes pendientes.")
+        lbl_msg.setStyleSheet("color: #4ade80; font-weight: bold;")
+        
+        no_alerts_layout.addStretch()
+        no_alerts_layout.addWidget(lbl_icon)
+        no_alerts_layout.addWidget(lbl_msg)
+        no_alerts_layout.addStretch()
+        
+        self.alerts_group_layout.addWidget(self.no_alerts_widget)
+
+        # 2. ScrollArea para cuando SI hay alertas
         self.alerts_container = QScrollArea()
-        self.alerts_container.setMaximumHeight(150)
+        self.alerts_container.setMaximumHeight(120) # Altura reducida
         self.alerts_container.setWidgetResizable(True)
+        self.alerts_container.setFrameShape(QFrame.Shape.NoFrame)
+        self.alerts_container.setStyleSheet("background: transparent;")
         
-        self.alerts_widget = QWidget()
-        self.alerts_layout = QVBoxLayout(self.alerts_widget)
-        self.alerts_container.setWidget(self.alerts_widget)
+        self.alerts_content_widget = QWidget()
+        self.alerts_content_widget.setStyleSheet("background: transparent;")
+        self.alerts_list_layout = QVBoxLayout(self.alerts_content_widget)
+        self.alerts_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.alerts_list_layout.setSpacing(5)
         
-        alerts_layout.addWidget(self.alerts_container)
-        layout.addWidget(alerts_group)
+        self.alerts_container.setWidget(self.alerts_content_widget)
+        self.alerts_group_layout.addWidget(self.alerts_container)
+        
+        layout.addWidget(self.alerts_group)
 
     def _setup_actions_section(self, layout):
         """Configurar sección de acciones rápidas."""
@@ -106,6 +132,7 @@ class DailyReportsView(QWidget):
 
         # Botón para generar reporte de hoy
         self.btn_generate_today = QPushButton("📈 Generar Reporte de Hoy")
+        self.btn_generate_today.setProperty("accent", "primary")
         self.btn_generate_today.clicked.connect(self._generate_today_report)
         actions_layout.addWidget(self.btn_generate_today)
 
@@ -162,8 +189,8 @@ class DailyReportsView(QWidget):
     def _load_pending_alerts(self):
         """Cargar alertas de reportes pendientes."""
         # Limpiar alertas anteriores
-        for i in reversed(range(self.alerts_layout.count())):
-            child = self.alerts_layout.itemAt(i).widget()
+        for i in reversed(range(self.alerts_list_layout.count())):
+            child = self.alerts_list_layout.itemAt(i).widget()
             if child:
                 child.setParent(None)
 
@@ -172,34 +199,48 @@ class DailyReportsView(QWidget):
                 pending = get_pending_reports(session, days_back=7)
                 
                 if not pending:
-                    # No hay reportes pendientes
-                    no_alerts = QLabel("✅ No hay reportes pendientes")
-                    no_alerts.setStyleSheet("color: green; font-weight: bold; padding: 10px;")
-                    self.alerts_layout.addWidget(no_alerts)
+                    # Mostrar estado "Todo OK"
+                    self.no_alerts_widget.setVisible(True)
+                    self.alerts_container.setVisible(False)
+                    # Estilo relajado y compacto
+                    self.alerts_group.setStyleSheet("QGroupBox { border: 1px solid #334155; border-radius: 6px; margin-top: 10px; } QGroupBox::title { color: #94a3b8; }")
                 else:
-                    # Mostrar alertas
+                    # Mostrar lista de alertas
+                    self.no_alerts_widget.setVisible(False)
+                    self.alerts_container.setVisible(True)
+                    # Estilo de advertencia
+                    self.alerts_group.setStyleSheet("QGroupBox { border: 1px solid #f59e0b; border-radius: 6px; margin-top: 10px; } QGroupBox::title { color: #f59e0b; font-weight: bold; }")
+                    
                     for status in pending:
                         alert_frame = QFrame()
-                        alert_frame.setStyleSheet("QFrame { background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; margin: 2px; padding: 5px; }")
+                        alert_frame.setStyleSheet("QFrame { background-color: #451a03; border: 1px solid #78350f; border-radius: 4px; padding: 4px; }")
                         alert_layout = QHBoxLayout(alert_frame)
+                        alert_layout.setContentsMargins(8, 4, 8, 4)
                         
                         alert_text = QLabel(f"⚠️ Falta reporte del {status['date'].strftime('%d/%m/%Y')} ({status['sales_count']} ventas)")
-                        alert_text.setStyleSheet("font-weight: bold; color: #856404;")
+                        alert_text.setStyleSheet("font-weight: bold; color: #fbbf24; border: none; background: transparent;")
                         alert_layout.addWidget(alert_text)
+                        
+                        alert_layout.addStretch()
                         
                         # Botón para generar reporte de esa fecha
                         btn_generate = QPushButton("Generar")
+                        btn_generate.setCursor(Qt.CursorShape.PointingHandCursor)
+                        btn_generate.setStyleSheet("QPushButton { background-color: #f59e0b; color: #000; border: none; border-radius: 3px; padding: 2px 10px; font-weight: bold; } QPushButton:hover { background-color: #fbbf24; }")
                         btn_generate.clicked.connect(
                             lambda checked, d=status['date']: self._generate_report_for_date(d)
                         )
                         alert_layout.addWidget(btn_generate)
                         
-                        self.alerts_layout.addWidget(alert_frame)
+                        self.alerts_list_layout.addWidget(alert_frame)
 
         except Exception as e:
+            # Fallback error display
+            self.no_alerts_widget.setVisible(False)
+            self.alerts_container.setVisible(True)
             error_label = QLabel(f"❌ Error al cargar alertas: {str(e)}")
-            error_label.setStyleSheet("color: red; font-weight: bold; padding: 10px;")
-            self.alerts_layout.addWidget(error_label)
+            error_label.setStyleSheet("color: #ef4444; font-weight: bold; padding: 10px;")
+            self.alerts_list_layout.addWidget(error_label)
 
     def _load_reports_table(self):
         """Cargar tabla de reportes existentes."""
@@ -228,10 +269,17 @@ class DailyReportsView(QWidget):
                     
                     # Estado
                     status_item = QTableWidgetItem(report.report_status)
+                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     if report.report_status == "GENERADO":
-                        status_item.setBackground(Qt.GlobalColor.green)
+                        status_item.setForeground(QColor("#00ff00"))
+                        font = status_item.font()
+                        font.setBold(True)
+                        status_item.setFont(font)
                     elif report.report_status == "PENDIENTE":
-                        status_item.setBackground(Qt.GlobalColor.yellow)
+                        status_item.setForeground(QColor("#ffcc00"))
+                        font = status_item.font()
+                        font.setBold(True)
+                        status_item.setFont(font)
                     self.reports_table.setItem(row, 1, status_item)
                     
                     # Ventas
@@ -279,8 +327,6 @@ class DailyReportsView(QWidget):
                 else:
                     self.btn_generate_today.setText(f"📈 Generar Reporte de Hoy ({today_status['sales_count']} ventas)")
                     self.btn_generate_today.setEnabled(True)
-                    # Mantener estilo por defecto del tema; si se desea destacar, usar propiedad de acento
-                    # self.btn_generate_today.setProperty("accent", "primary")
 
         except Exception as e:
             print(f"Error al actualizar botón: {e}")
@@ -388,34 +434,33 @@ class ReportDetailsDialog(QDialog):
         self.report = report
         self._current_user = current_user or "—"
         self._can_view_all_sales = can_view_all_sales
-        self.setWindowTitle(f"Detalles del Reporte - {report.report_date.strftime('%d/%m/%Y')}")
+        self.setWindowTitle(f"Reporte Detallado - {report.report_date.strftime('%d/%m/%Y')}")
         self.setModal(True)
         self._setup_responsive_size()
         self._setup_ui()
 
     def _setup_responsive_size(self):
         """Configurar tamaño optimizado para tabla de ventas."""
-        # Tamaño optimizado para mostrar tabla profesional
-        self.resize(1300, 800)
-        
-        # Hacer que la ventana sea redimensionable por el usuario  
+        self.resize(1300, 700)
         self.setMinimumSize(1000, 600)
-        self.setMaximumSize(1600, 1000)
 
     def _setup_ui(self):
-        """Configurar interfaz del diálogo con tabla estética tipo dashboard."""
+        """Configurar interfaz del diálogo."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(25, 25, 25, 25)
-        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        
+        # Fondo oscuro general
+        self.setStyleSheet("background-color: #1e1e1e; color: #ffffff;")
 
         # Parsear datos del reporte
         import json
-        report_data = {}
+        self.report_data = {}
         try:
             if hasattr(self.report, 'report_data_json') and self.report.report_data_json:
-                report_data = json.loads(self.report.report_data_json)
+                self.report_data = json.loads(self.report.report_data_json)
             else:
-                report_data = {
+                self.report_data = {
                     'totals': {
                         'total_sales': getattr(self.report, 'total_sales', 0),
                         'total_amount_usd': getattr(self.report, 'total_amount_usd', 0),
@@ -425,281 +470,283 @@ class ReportDetailsDialog(QDialog):
                     'sales_data': []
                 }
         except Exception:
-            report_data = {'totals': {}, 'sales_data': []}
+            self.report_data = {'totals': {}, 'sales_data': []}
 
-        # Header del reporte
-        self._create_report_header(layout)
+        totals = self.report_data.get('totals', {})
+
+        # 1. Header
+        self._create_report_header(layout, totals)
         
-        # Tabla principal de ventas
-        self._create_main_sales_table(layout, report_data)
+        # 2. Tabla
+        self._create_main_sales_table(layout, self.report_data)
 
-        # Panel de resumen (colapsable, por defecto oculto)
-        self._create_collapsible_summary(layout, report_data.get('totals', {}))
+        # Separador
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: #444; margin-top: 10px; margin-bottom: 10px;")
+        layout.addWidget(line)
 
-        # Botones
+        # 3. Footer (Totales)
+        self._create_footer_totals(layout, totals)
+
+        # 4. Botones
         self._create_action_buttons(layout)
 
-    def _create_report_header(self, layout):
-        """Crear header compacto con título y 'pills' de fecha y estado."""
-        header = QFrame()
-        header.setStyleSheet("QFrame { background-color: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 10px 14px; }")
+    def _create_report_header(self, layout, totals):
+        """Crear header con título y resumen de una línea."""
+        header_widget = QWidget()
+        h_layout = QVBoxLayout(header_widget)
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(5)
 
-        h = QHBoxLayout(header)
-        h.setContentsMargins(8, 6, 8, 6)
-        h.setSpacing(10)
+        # Título Principal
+        title_row = QHBoxLayout()
+        icon_label = QLabel("📊") # O usar un icono real
+        icon_label.setStyleSheet("font-size: 18px; background-color: transparent;")
+        
+        title_label = QLabel(f"Reporte Diario - {self.report.report_date.strftime('%d/%m/%Y')}")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff; background-color: transparent;")
+        
+        title_row.addWidget(icon_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        h_layout.addLayout(title_row)
 
-        title = QLabel("📊 Reporte Diario de Ventas")
-        title.setStyleSheet("QLabel { color: #e2e8f0; font-weight: 700; font-size: 16px; }")
-        h.addWidget(title)
+        # Subtítulo con info
+        status = (self.report.report_status or 'GENERADO').upper()
+        total_sales = totals.get('total_sales', 0)
+        total_usd = totals.get('total_amount_usd', 0.0)
+        
+        subtitle = QLabel(f"Estado: {status} | Total Ventas: {total_sales} | Total USD: ${total_usd:,.2f}")
+        subtitle.setStyleSheet("font-size: 13px; color: #cccccc; font-weight: bold; background-color: transparent;")
+        h_layout.addWidget(subtitle)
 
-        # Separador flexible
-        h.addStretch()
-
-        # Helper local para crear una 'pill'
-        def make_pill(text: str, bg: str = "#1e293b", fg: str = "#cbd5e1", br: str = "#334155") -> QLabel:
-            lbl = QLabel(text)
-            lbl.setStyleSheet(f"QLabel {{ color: {fg}; background-color: {bg}; border: 1px solid {br}; border-radius: 12px; padding: 6px 10px; font-size: 12px; }}")
-            return lbl
-
-        # Fecha como pill
-        fecha_txt = self.report.report_date.strftime('%A, %d de %B de %Y')
-        pill_fecha = make_pill(f"📅 {fecha_txt}")
-        h.addWidget(pill_fecha)
-
-        # Estado como pill con color según estado
-        estado = (self.report.report_status or '').upper()
-        if estado == 'GENERADO':
-            pill_estado = make_pill("✔ GENERADO", bg="#052e1a", fg="#86efac", br="#14532d")
-        elif estado == 'PENDIENTE':
-            pill_estado = make_pill("⏳ PENDIENTE", bg="#3f2d05", fg="#fde68a", br="#854d0e")
-        else:
-            pill_estado = make_pill(f"📋 {estado}")
-        h.addWidget(pill_estado)
-
-        layout.addWidget(header)
+        layout.addWidget(header_widget)
 
     def _create_main_sales_table(self, layout, report_data):
-        """Crear tabla principal de ventas con diseño profesional."""
-        table_frame = QFrame()
-        table_frame.setStyleSheet("QFrame { background-color: #0f172a; border: 1px solid #1e293b; border-radius: 8px; }")
-        
-        table_layout = QVBoxLayout(table_frame)
-        table_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Título de la tabla
-        table_title = QLabel("📊 Detalle de Ventas")
-        table_title.setStyleSheet("QLabel { font-size: 18px; font-weight: bold; color: #e2e8f0; padding: 15px 20px 10px 20px; background-color: #1e293b; border-top-left-radius: 8px; border-top-right-radius: 8px; }")
-        table_layout.addWidget(table_title)
-        
-        # Crear tabla
+        """Crear tabla de ventas."""
+        # Título de sección
+        title_label = QLabel("📄 Ventas del Día")
+        title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff; margin-top: 10px; background-color: transparent;")
+        layout.addWidget(title_label)
+
         sales_table = QTableWidget()
         
-        # Columnas similares a la imagen
+        # Columnas según imagen
         columns = [
-            ('ID', 60),
-            ('Fecha', 100), 
-            ('Núm. Orden', 120),
-            ('Artículo', 200),
-            ('Asesor', 150),
-            ('Venta $', 120),
-            ('Forma Pago', 130),
-            ('Serial Billete', 120), 
-            ('Banco', 120),
-            ('Referencia', 130),
-            ('Fecha Pago', 100),
-            ('Monto Bs.D', 120)
+            ('Nº Orden', 80),
+            ('Artículo', 150),
+            ('Asesor', 100),
+            ('Venta $', 80),
+            ('Forma Pago', 100),
+            ('Serial', 80),
+            ('Banco', 80),
+            ('Referencia', 80),
+            ('Fecha Pago', 90),
+            ('Monto Bs', 100),
+            ('Monto $', 80),
+            ('Abono $', 80),
+            ('Restante $', 80),
+            ('Por Cobrar', 80),
+            ('IVA', 60),
+            ('Diseño $', 70),
+            ('Inst', 50),
+            ('Ingresos $', 80)
         ]
         
         sales_table.setColumnCount(len(columns))
-        # Preparar datos reales
-        sales_data = report_data.get('sales_data', []) or []
-        # Filtrar por usuario si corresponde
-        if not self._can_view_all_sales and sales_data:
-            sales_data = [s for s in sales_data if (s.get('asesor') or '') == (self._current_user or '')]
-        sales_table.setRowCount(len(sales_data))
+        sales_table.setHorizontalHeaderLabels([c[0] for c in columns])
         
-        # Headers
-        headers = [col[0] for col in columns]
-        sales_table.setHorizontalHeaderLabels(headers)
-        
-        # Anchos de columnas
+        # Configurar anchos
         for i, (_, width) in enumerate(columns):
             sales_table.setColumnWidth(i, width)
+
+        # Estilo de la tabla (Dark Theme)
+        sales_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                gridline-color: #444444;
+                border: none;
+                font-size: 12px;
+            }
+            QHeaderView::section {
+                background-color: #333333;
+                color: #cccccc;
+                padding: 5px;
+                border: 1px solid #444444;
+                font-weight: bold;
+            }
+            QTableWidget::item {
+                padding: 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #444444;
+            }
+        """)
         
-        # Estilo profesional
-        sales_table.setStyleSheet("QTableWidget { background-color: #0f172a; border: none; gridline-color: #334155; color: #e2e8f0; font-size: 13px; } QTableWidget::item { padding: 12px 8px; border-bottom: 1px solid #1e293b; } QTableWidget::item:selected { background-color: #1e293b; color: #3b82f6; } QHeaderView::section { background-color: #1e293b; color: #f8fafc; font-weight: bold; font-size: 14px; padding: 12px 8px; border: none; border-right: 1px solid #334155; border-bottom: 2px solid #3b82f6; }")
-        
-        # Llenar tabla con datos reales
-        from PySide6.QtGui import QColor
-        for row, sale in enumerate(sales_data):
-            row_values = [
-                sale.get('id', row + 1),
-                (sale.get('fecha') or '')[:16],
-                sale.get('numero_orden', '') or '',
-                sale.get('articulo', '') or '',
-                sale.get('asesor', '') or '',
-                f"${(sale.get('venta_usd', 0) or 0):,.2f}",
-                sale.get('forma_pago', '') or '',
-                sale.get('serial_billete', '') or '',
-                sale.get('banco', '') or '',
-                sale.get('referencia', '') or '',
-                (sale.get('fecha_pago') or '')[:10],
-                f"Bs. {(sale.get('monto_bs', 0) or 0):,.2f}" if sale.get('monto_bs') else ''
-            ]
-            for col, value in enumerate(row_values):
-                item = QTableWidgetItem(str(value))
-                # Alineación: texto centrado por defecto, montos a la derecha
-                if col in (5, 11):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                else:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                # Colores especiales
-                if col == 5:  # Venta $
-                    item.setForeground(QColor("#22c55e"))
-                elif col == 11 and value:  # Monto Bs.D
-                    item.setForeground(QColor("#f59e0b"))
-                elif col == 6:  # Forma de Pago
-                    if "Efectivo" in str(value):
-                        item.setForeground(QColor("#10b981"))
-                    elif "Pago Móvil" in str(value) or "Pago Movil" in str(value):
-                        item.setForeground(QColor("#3b82f6"))
-                sales_table.setItem(row, col, item)
-        
-        # Propiedades de la tabla
-        sales_table.setAlternatingRowColors(True)
-        sales_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         sales_table.verticalHeader().setVisible(False)
-        sales_table.horizontalHeader().setStretchLastSection(True)
         
-        table_layout.addWidget(sales_table)
-        layout.addWidget(table_frame)
-
-    def _create_summary_panel(self, layout, totals):
-        """Crear panel de resumen financiero."""
-        summary_frame = QFrame()
-        summary_frame.setStyleSheet("QFrame { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px; }")
+        # Llenar datos
+        sales_data = report_data.get('sales_data', []) or []
+        if not self._can_view_all_sales and sales_data:
+            sales_data = [s for s in sales_data if (s.get('asesor') or '') == (self._current_user or '')]
+            
+        sales_table.setRowCount(len(sales_data))
         
-        summary_layout = QHBoxLayout(summary_frame)
-        summary_layout.setContentsMargins(8, 8, 8, 8)
-        summary_layout.setSpacing(12)
+        from PySide6.QtGui import QColor
+
+        for row, sale in enumerate(sales_data):
+            # Helper formatters
+            def fmt_usd(v): return f"${(v or 0):,.2f}"
+            def fmt_bs(v): return f"Bs. {(v or 0):,.2f}"
+            
+            # Mapeo de valores a columnas
+            # 0: Nº Orden, 1: Artículo, 2: Asesor, 3: Venta $, 4: Forma Pago
+            # 5: Serial, 6: Banco, 7: Referencia, 8: Fecha Pago, 9: Monto Bs
+            # 10: Monto $, 11: Abono $, 12: Restante $, 13: Por Cobrar, 14: IVA, 15: Diseño $, 16: Inst, 17: Ingresos $
+            
+            values = [
+                sale.get('numero_orden', ''),
+                sale.get('articulo', ''),
+                sale.get('asesor', ''),
+                fmt_usd(sale.get('venta_usd')),
+                sale.get('forma_pago', ''),
+                sale.get('serial_billete', ''),
+                sale.get('banco', ''),
+                sale.get('referencia', ''),
+                (sale.get('fecha_pago') or '')[:10],
+                fmt_bs(sale.get('monto_bs')),
+                fmt_usd(sale.get('monto_usd_calculado')), # Monto $ (pagado en esta txn)
+                fmt_usd(sale.get('abono_usd')),
+                "", # Restante $ (Cobro de deuda - Placeholder)
+                fmt_usd(sale.get('restante')), # Por Cobrar (Deuda actual)
+                fmt_usd(sale.get('iva')),
+                fmt_usd(sale.get('diseno_usd')),
+                "0", # Inst (placeholder)
+                fmt_usd(sale.get('ingresos_usd'))
+            ]
+            
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                
+                # Colores específicos
+                if col == 13: # Por Cobrar
+                    restante = sale.get('restante', 0) or 0
+                    if restante > 0.01:
+                        item.setForeground(QColor("#ff4d4d")) # Rojo
+                    else:
+                        item.setForeground(QColor("#cccccc"))
+                elif col == 17: # Ingresos $
+                    item.setForeground(QColor("#00ff00")) # Verde
+                else:
+                    item.setForeground(QColor("#ffffff"))
+                    
+                sales_table.setItem(row, col, item)
+
+        layout.addWidget(sales_table)
+
+    def _create_footer_totals(self, layout, totals):
+        """Crear sección de totales al pie."""
+        from PySide6.QtWidgets import QCheckBox, QGridLayout
         
-        # Cards de resumen
-        cards_data = [
-            ("📊 Total Operaciones", str(totals.get('total_sales', 0)), "#3b82f6"),
-            ("💰 Ingresos USD", f"${totals.get('total_ingresos_usd', 0):,.2f}", "#22c55e"),
-            ("💵 Ventas USD", f"${totals.get('total_amount_usd', 0):,.2f}", "#f59e0b"),
-            ("📈 Total Bs.", f"Bs. {totals.get('total_amount_bs', 0):,.2f}", "#ef4444")
-        ]
+        footer_widget = QWidget()
+        f_layout = QVBoxLayout(footer_widget)
+        f_layout.setContentsMargins(0, 0, 0, 0)
         
-        for title, value, color in cards_data:
-            card = self._create_summary_card(title, value, color)
-            summary_layout.addWidget(card)
+        # Checkbox
+        chk_totals = QCheckBox("Totales del Día")
+        chk_totals.setChecked(True)
+        chk_totals.setStyleSheet("QCheckBox { color: #ffffff; font-weight: bold; } QCheckBox::indicator { width: 16px; height: 16px; }")
+        chk_totals.setEnabled(False) # Solo visual según imagen
+        f_layout.addWidget(chk_totals)
         
-        layout.addWidget(summary_frame)
-
-    def _create_collapsible_summary(self, layout, totals):
-        """Crear un encabezado con botón para mostrar/ocultar el resumen y el panel en sí (oculto por defecto)."""
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(8)
-
-        toggle_btn = QToolButton()
-        toggle_btn.setText("▶ Mostrar resumen")
-        toggle_btn.setCheckable(True)
-        toggle_btn.setChecked(False)
-        toggle_btn.setStyleSheet("color: #e2e8f0; background-color: transparent; padding: 6px 8px;")
-
-        header_label = QLabel("Resumen del día")
-        header_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-
-        header_row.addWidget(toggle_btn)
-        header_row.addWidget(header_label)
-        header_row.addStretch()
-
-        layout.addLayout(header_row)
-
-        # Contenedor del resumen
-        self._summary_container = QFrame()
-        inner_layout = QVBoxLayout(self._summary_container)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
-        self._create_summary_panel(inner_layout, totals)
-        self._summary_container.setVisible(False)
-        layout.addWidget(self._summary_container)
-
-        def on_toggle(checked: bool):
-            self._summary_container.setVisible(checked)
-            toggle_btn.setText("▼ Ocultar resumen" if checked else "▶ Mostrar resumen")
-
-        toggle_btn.toggled.connect(on_toggle)
-
-    def _create_summary_card(self, title, value, color):
-        """Crear tarjeta individual de resumen."""
-        card = QFrame()
-        card.setStyleSheet(f"QFrame {{ background-color: #0f172a; border: 1px solid {color}; border-radius: 6px; padding: 10px; }}")
+        # Grid de totales
+        grid = QGridLayout()
+        grid.setSpacing(10)
         
-        card_layout = QVBoxLayout(card)
-        card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Helper para etiquetas de totales
+        def add_total(row, col, label, value, color="#ffffff"):
+            lbl = QLabel(f"{label} {value}")
+            lbl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px; background-color: transparent;")
+            grid.addWidget(lbl, row, col)
+
+        # Fila 1
+        add_total(0, 0, "Total Ventas:", str(totals.get('total_sales', 0)))
+        add_total(0, 1, "Total USD:", f"${totals.get('total_amount_usd', 0):,.2f}")
+        add_total(0, 2, "Total Bs:", f"Bs. {totals.get('total_amount_bs', 0):,.2f}")
         
-        title_label = QLabel(title)
-        title_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 12px; font-weight: bold; text-align: center; }}")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Fila 2
+        add_total(1, 0, "Ingresos USD:", f"${totals.get('total_ingresos_usd', 0):,.2f}", "#00ff00")
+        add_total(1, 1, "Abonos USD:", f"${totals.get('total_abono_usd', 0):,.2f}")
+        add_total(1, 2, "Por Cobrar:", f"${totals.get('total_restante', 0):,.2f}", "#ff4d4d")
         
-        value_label = QLabel(value)
-        value_label.setStyleSheet("QLabel { color: #f8fafc; font-size: 16px; font-weight: bold; text-align: center; margin-top: 4px; }")
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        card_layout.addWidget(title_label)
-        card_layout.addWidget(value_label)
-        
-        return card
+        # Fila 3
+        # IVA Total, Diseño Total, Cobros Restantes (Calculado o placeholder)
+        # Asumimos Cobros Restantes = 0.00 si no está en totals
+        add_total(2, 0, "IVA Total:", f"${totals.get('total_iva', 0):,.2f}") # Necesitamos calcular IVA total si no viene
+        add_total(2, 1, "Diseño Total:", f"${totals.get('total_diseno', 0):,.2f}") # Necesitamos calcular Diseño total
+        add_total(2, 2, "Restante $:", "$0.00", "#00ff00") # Placeholder según imagen
+
+        f_layout.addLayout(grid)
+        layout.addWidget(footer_widget)
 
     def _create_action_buttons(self, layout):
         """Crear botones de acción mejorados."""
-        buttons_frame = QFrame()
-        buttons_layout = QHBoxLayout(buttons_frame)
-        buttons_layout.setSpacing(15)
-
-        # Botón Generar PDF e Imprimir
-        btn_print = QPushButton("🖨️ Imprimir")
-        btn_print.setStyleSheet("QPushButton { background-color: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 5px; font-weight: bold; font-size: 13px; } QPushButton:hover { background-color: #218838; } QPushButton:pressed { background-color: #1e7e34; }")
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        # Botón Imprimir PDF (Azul)
+        btn_print = QPushButton("🖨️ Imprimir PDF")
+        btn_print.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_print.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff; 
+                color: white; 
+                border: none; 
+                padding: 8px 15px; 
+                border-radius: 4px; 
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0069d9; }
+        """)
         btn_print.clicked.connect(self._print_report)
-        buttons_layout.addWidget(btn_print)
+        btn_layout.addWidget(btn_print)
         
-        # Botón Guardar como PDF
-        btn_export_pdf = QPushButton("💾 Guardar PDF")
-        btn_export_pdf.setStyleSheet("QPushButton { background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 5px; font-weight: bold; font-size: 13px; } QPushButton:hover { background-color: #0056b3; } QPushButton:pressed { background-color: #004085; }")
-        btn_export_pdf.clicked.connect(self._export_to_pdf)
-        buttons_layout.addWidget(btn_export_pdf)
-        
-        buttons_layout.addStretch()
-        
-        # Botón Cerrar
-        btn_close = QPushButton("✕ Cerrar")
-        btn_close.setStyleSheet("QPushButton { background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 5px; font-weight: bold; font-size: 13px; } QPushButton:hover { background-color: #545b62; } QPushButton:pressed { background-color: #495057; }")
+        # Botón Cerrar (Blanco/Gris)
+        btn_close = QPushButton("Cerrar")
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background-color: #f8f9fa; 
+                color: #333; 
+                border: 1px solid #ddd; 
+                padding: 8px 15px; 
+                border-radius: 4px; 
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #e2e6ea; }
+        """)
         btn_close.clicked.connect(self.accept)
-        buttons_layout.addWidget(btn_close)
+        btn_layout.addWidget(btn_close)
         
-        layout.addWidget(buttons_frame)
-
-
+        layout.addLayout(btn_layout)
 
     def _print_report(self):
         """Generar PDF del reporte y abrirlo para imprimir."""
         try:
-            import tempfile
-            import os
+            # Obtener datos de ventas
+            sales_data = self.report_data.get('sales_data', [])
             
-            # Crear archivo temporal PDF
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-            temp_file.close()
+            # Generar PDF usando la nueva función
+            pdf_path = print_daily_report_excel_pdf(sales_data, self.report.report_date)
             
-            # Generar PDF
-            pdf_path = self._generate_report_pdf(temp_file.name)
-            
-            if pdf_path:
+            if pdf_path and pdf_path.exists():
                 # Abrir PDF con aplicación predeterminada
                 import subprocess
-                subprocess.run(['start', '', pdf_path], shell=True)
+                subprocess.run(['start', '', str(pdf_path)], shell=True)
                 
                 QMessageBox.information(self, "Éxito", 
                     "Reporte PDF generado y abierto para imprimir.")
@@ -713,6 +760,7 @@ class ReportDetailsDialog(QDialog):
         """Exportar el reporte directamente a PDF."""
         try:
             from PySide6.QtWidgets import QFileDialog
+            import shutil
             
             # Seleccionar ubicación para guardar
             filename, _ = QFileDialog.getSaveFileName(
@@ -724,464 +772,15 @@ class ReportDetailsDialog(QDialog):
             
             if filename:
                 # Generar PDF
-                pdf_path = self._generate_report_pdf(filename)
+                sales_data = self.report_data.get('sales_data', [])
+                pdf_path = print_daily_report_excel_pdf(sales_data, self.report.report_date)
                 
-                if pdf_path:
-                    QMessageBox.information(self, "Éxito", 
-                        f"Reporte PDF exportado exitosamente:\n{filename}")
-                    
-                    # Preguntar si desea abrir el archivo
-                    reply = QMessageBox.question(self, "Abrir PDF", 
-                        "¿Desea abrir el archivo PDF generado?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        import subprocess
-                        subprocess.run(['start', '', filename], shell=True)
-                else:
-                    QMessageBox.warning(self, "Error", "No se pudo generar el PDF.")
-                
+                if pdf_path and pdf_path.exists():
+                    shutil.copy2(pdf_path, filename)
+                    QMessageBox.information(self, "Éxito", "Reporte guardado exitosamente.")
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al exportar PDF: {str(e)}")
-
-    def _generate_report_pdf(self, output_path: str) -> str | None:
-        """Generar PDF del reporte siguiendo el formato de diario11.pdf."""
-        try:
-            from reportlab.lib.pagesizes import A4, landscape
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.units import inch, cm
-            from reportlab.lib import colors
-            from reportlab.lib.enums import TA_CENTER, TA_LEFT
-            import json
-            import os
-            
-            # Crear documento PDF en orientación horizontal con márgenes reducidos para tabla más grande
-            doc = SimpleDocTemplate(output_path, pagesize=landscape(A4),
-                                    rightMargin=0.5*cm, leftMargin=0.5*cm,
-                                    topMargin=1.2*cm, bottomMargin=2*cm)
-            
-            # Estilos personalizados
-            styles = getSampleStyleSheet()
-            
-            # Estilo para el título principal
-            title_style = ParagraphStyle(
-                'ReportTitle',
-                parent=styles['Normal'],
-                fontSize=14,  # Reducido 20% de 18 a 14
-                spaceAfter=20,  # Espacio ajustado
-                alignment=TA_CENTER,
-                fontName='Helvetica-Bold'
-            )
-            
-            # Estilo para los encabezados de sección más grandes
-            section_style = ParagraphStyle(
-                'SectionHeader',
-                parent=styles['Normal'],
-                fontSize=14,  # Aumentado de 12 a 14
-                spaceAfter=15,  # Más espacio después
-                fontName='Helvetica-Bold'
-            )
-            
-            # Parsear datos del reporte
-            report_data = {}
-            try:
-                if self.report.report_data_json:
-                    report_data = json.loads(self.report.report_data_json)
-            except:
-                report_data = {}
-            
-            totals = report_data.get('totals', {})
-            sales_data = report_data.get('sales_data', [])
-            
-            # Aplicar filtro adicional si el usuario no puede ver todas las ventas
-            if not self._can_view_all_sales and sales_data:
-                # Filtrar datos de ventas para mostrar solo las del usuario actual
-                filtered_sales = [sale for sale in sales_data if sale.get('asesor') == self._current_user]
-                
-                # Recalcular totales basados en las ventas filtradas
-                if filtered_sales != sales_data:
-                    sales_data = filtered_sales
-                    totals = {
-                        'total_sales': len(filtered_sales),
-                        'total_amount_usd': sum((sale.get('venta_usd', 0) or 0) for sale in filtered_sales),
-                        'total_amount_bs': sum((sale.get('monto_bs', 0) or 0) for sale in filtered_sales),
-                        'total_monto_usd_calculado': sum((sale.get('monto_usd_calculado', 0) or 0) for sale in filtered_sales),
-                        'total_abono_usd': sum((sale.get('abono_usd', 0) or 0) for sale in filtered_sales),
-                        'total_restante': sum((sale.get('restante', 0) or 0) for sale in filtered_sales),
-                        'total_iva': sum((sale.get('iva', 0) or 0) for sale in filtered_sales),
-                        'total_diseno_usd': sum((sale.get('diseno_usd', 0) or 0) for sale in filtered_sales),
-                        'total_ingresos_usd': sum((sale.get('ingresos_usd', 0) or 0) for sale in filtered_sales)
-                    }
-            
-            # Contenido del PDF siguiendo el formato de diario11.pdf
-            story = []
-            
-            # Crear encabezado con logo y título
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', '..', 'assets', 'img', 'logo.png')
-            
-            # Verificar si existe el logo
-            if os.path.exists(logo_path):
-                # Crear imagen del logo más grande manteniendo proporciones
-                logo = Image(logo_path, width=3.5*cm, height=3.5*cm, kind='proportional')
-                
-                # Título del reporte con fecha
-                fecha_str = self.report.report_date.strftime('%d de %B de %Y')
-                title_text = f"INGRESOS DIARIOS {fecha_str.upper()}"
-                title_paragraph = Paragraph(title_text, title_style)
-                
-                # Crear tabla con logo y título ajustando el espacio para logo más grande
-                header_table = Table([[logo, title_paragraph]], colWidths=[5*cm, 23*cm])
-                header_table.setStyle(TableStyle([
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ('ALIGN', (0, 0), (0, 0), 'LEFT'),    # Logo a la izquierda
-                    ('ALIGN', (1, 0), (1, 0), 'CENTER'),  # Título centrado
-                    ('LEFTPADDING', (0, 0), (0, 0), 0),   # Sin padding izquierdo en logo
-                    ('RIGHTPADDING', (0, 0), (0, 0), 10), # Pequeño espacio entre logo y título
-                ]))
-                
-                story.append(header_table)
-            else:
-                # Si no hay logo, solo el título
-                fecha_str = self.report.report_date.strftime('%d de %B de %Y')
-                title_text = f"INGRESOS DIARIOS {fecha_str.upper()}"
-                story.append(Paragraph(title_text, title_style))
-            
-            story.append(Spacer(1, 20))
-            
-            # Tabla principal con el formato exacto del diario11.pdf
-            # Encabezados: ORDEN ARTICULO ASESOR VENTA $ FORMA SERIAL DV BANCO REF FECHA PAGO MONTO MONTO $ ABONO $ RESTANTE $ I.V.A DISEÑO $
-            
-            main_table_data = []
-            
-            # Encabezado de la tabla con títulos optimizados
-            headers = [
-                'ORDEN', 'ARTICULO', 'ASESOR', 'VENTA $', 'FORMA', 'SERIAL\nDV', 
-                'BANCO', 'REF', 'FECHA\nPAGO', 'MONTO', 'MONTO\n$', 'ABONO\n$', 
-                'RESTANTE\n$', 'I.V.A', 'DISEÑO\n$', 'INGRESOS\n$'
-            ]
-            main_table_data.append(headers)
-            
-            # Agregar datos de ventas con formato controlado
-            for sale in sales_data:
-                row = [
-                    sale.get('numero_orden', '')[:10],  # Limitar orden
-                    sale.get('articulo', '')[:15],      # Limitar artículo
-                    sale.get('asesor', '')[:12],        # Limitar asesor
-                    f"{sale.get('venta_usd', 0):.0f}",  # Venta sin decimales
-                    sale.get('forma_pago', '')[:12] if sale.get('forma_pago') else '',  # Forma pago limitada
-                    sale.get('serial_billete', '')[:12] if sale.get('serial_billete') else '',  # Serial limitado
-                    sale.get('banco', '')[:10] if sale.get('banco') else '',  # Banco limitado
-                    sale.get('referencia', '')[:8] if sale.get('referencia') else '',  # Ref limitada
-                    sale.get('fecha_pago', '')[:10] if sale.get('fecha_pago') else '',  # Fecha formato estándar
-                    f"{sale.get('monto_bs', 0):.0f}" if sale.get('monto_bs') else '',  # Monto Bs sin decimales
-                    f"{sale.get('monto_usd_calculado', 0):.0f}" if sale.get('monto_usd_calculado') else '',  # Monto USD calc
-                    f"{sale.get('abono_usd', 0):.0f}" if sale.get('abono_usd') else '',  # Abono sin decimales
-                    f"{sale.get('restante', 0):.0f}" if sale.get('restante') else '',  # Restante sin decimales
-                    f"{sale.get('iva', 0):.0f}" if sale.get('iva') else '',  # IVA sin decimales
-                    f"{sale.get('diseno_usd', 0):.0f}" if sale.get('diseno_usd') else '',  # Diseño sin decimales
-                    f"{sale.get('ingresos_usd', 0):.0f}" if sale.get('ingresos_usd') else ''  # Ingresos sin decimales (AGREGADO)
-                ]
-                main_table_data.append(row)
-            
-            # Línea de totales (como en el formato original)
-            total_row = [
-                'TOTAL',
-                str(totals.get('total_sales', 0)),
-                '-',
-                f"{totals.get('total_amount_usd', 0):.0f}",
-                '',
-                '',
-                '',
-                '',
-                '',
-                f"{totals.get('total_amount_bs', 0):.0f}",
-                f"{totals.get('total_monto_usd_calculado', 0):.0f}",
-                f"{totals.get('total_abono_usd', 0):.0f}",
-                f"{totals.get('total_restante', 0):.0f}",
-                f"{totals.get('total_iva', 0):.0f}",
-                f"{totals.get('total_diseno_usd', 0):.0f}",
-                f"{totals.get('total_ingresos_usd', 0):.0f}"  # Total ingresos agregado
-            ]
-            main_table_data.append(total_row)
-            
-            # Crear tabla principal más grande con anchos aumentados
-            # Ancho total disponible en horizontal con márgenes reducidos: ~30cm
-            col_widths = [
-                1.7*cm,   # ORDEN 
-                2.4*cm,   # ARTICULO 
-                1.8*cm,   # ASESOR 
-                1.5*cm,   # VENTA $ 
-                2.0*cm,   # FORMA 
-                1.8*cm,   # SERIAL DV 
-                1.6*cm,   # BANCO 
-                1.2*cm,   # REF 
-                2.4*cm,   # FECHA PAGO 
-                1.5*cm,   # MONTO 
-                1.4*cm,   # MONTO $ 
-                1.4*cm,   # ABONO $ 
-                1.5*cm,   # RESTANTE $ 
-                1.2*cm,   # I.V.A 
-                1.4*cm,   # DISEÑO $ 
-                1.4*cm    # INGRESOS $ (AGREGADO)
-            ]
-            
-            # Crear tabla con altura de filas diferenciada
-            row_heights = [1.2*cm] + [0.7*cm] * (len(main_table_data) - 1)  # Encabezado más alto, datos normales
-            main_table = Table(main_table_data, colWidths=col_widths, repeatRows=1, rowHeights=row_heights)
-            
-            # Estilo de la tabla principal con encabezados optimizados
-            main_table.setStyle(TableStyle([
-                # Encabezado
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 7),  # Reducido para que quepa en las columnas
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-                
-                # Datos - alineación específica por tipo de columna
-                ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (-1, -2), 9),  # Aumentado para mejor legibilidad
-                ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
-                
-                # Alineación por columnas: texto a la izquierda, números a la derecha
-                ('ALIGN', (0, 1), (2, -1), 'LEFT'),    # ORDEN, ARTICULO, ASESOR - izquierda
-                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),   # VENTA $ - derecha
-                ('ALIGN', (4, 1), (8, -1), 'LEFT'),    # FORMA, SERIAL, BANCO, REF, FECHA - izquierda
-                ('ALIGN', (9, 1), (-1, -1), 'RIGHT'),  # Todos los montos - derecha
-                
-                # Fila de totales
-                ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, -1), (-1, -1), 10),  # Aumentado para mejor legibilidad
-                ('ALIGN', (0, -1), (2, -1), 'LEFT'),   # Texto TOTAL a la izquierda
-                ('ALIGN', (3, -1), (-1, -1), 'RIGHT'), # Números de totales a la derecha
-                
-                # Bordes más definidos
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('LINEBELOW', (0, 0), (-1, 0), 2, colors.black),  # Línea gruesa bajo encabezado
-            ]))
-            
-            story.append(main_table)
-            
-            # Sección de firmas con líneas apropiadas
-            # Agregar espacio antes de las firmas
-            story.append(Spacer(1, 30))
-            
-            # Crear líneas para las firmas
-            signature_lines = Table([
-                ['_' * 30, '_' * 30],
-                ['YOLY MENDOZA', 'MIGUEL ROSALES'],
-                ['ASISTENTE ADMINISTRATIVO', 'PRESIDENTE']
-            ], colWidths=[4*inch, 4*inch])
-            
-            signature_lines.setStyle(TableStyle([
-                # Líneas superiores
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                # Nombres
-                ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 1), (-1, 1), 11),
-                ('ALIGN', (0, 1), (-1, 1), 'CENTER'),
-                ('TOPPADDING', (0, 1), (-1, 1), 10),
-                # Cargos
-                ('FONTNAME', (0, 2), (-1, 2), 'Helvetica'),
-                ('FONTSIZE', (0, 2), (-1, 2), 9),
-                ('ALIGN', (0, 2), (-1, 2), 'CENTER'),
-                ('TOPPADDING', (0, 2), (-1, 2), 5),
-            ]))
-            
-            story.append(signature_lines)
-            
-            # Construir PDF
-            doc.build(story)
-            
-            return output_path
-            
-        except Exception as e:
-            print(f"Error generando PDF: {e}")
-            return None
-
-    def _generate_report_html(self) -> str:
-        """Generar HTML completo del reporte para impresión/exportación."""
-        import json
-        
-        report_data = {}
-        try:
-            if self.report.report_data_json:
-                report_data = json.loads(self.report.report_data_json)
-        except:
-            report_data = {}
-        
-        totals = report_data.get('totals', {})
-        payment_methods = report_data.get('payment_methods', {})
-        asesores = report_data.get('asesores_summary', {})
-        sales_data = report_data.get('sales_data', [])
-        
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Reporte Diario - {self.report.report_date.strftime('%d/%m/%Y')}</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    font-size: 10px;
-                    margin: 0;
-                    padding: 20px;
-                }}
-                h1 {{ font-size: 18px; text-align: center; color: #2c3e50; }}
-                h2 {{ font-size: 14px; color: #34495e; border-bottom: 1px solid #bdc3c7; }}
-                h3 {{ font-size: 12px; color: #7f8c8d; }}
-                table {{ 
-                    width: 100%; 
-                    border-collapse: collapse; 
-                    margin: 10px 0;
-                    font-size: 9px;
-                }}
-                th, td {{ 
-                    border: 1px solid #bdc3c7; 
-                    padding: 4px; 
-                    text-align: left; 
-                }}
-                th {{ 
-                    background-color: #ecf0f1; 
-                    font-weight: bold; 
-                }}
-                .summary-box {{
-                    background-color: #f8f9fa;
-                    border: 1px solid #dee2e6;
-                    padding: 10px;
-                    margin: 10px 0;
-                }}
-                .total-row {{ font-weight: bold; background-color: #e8f4f8; }}
-            </style>
-        </head>
-        <body>
-            <h1>📊 Reporte Diario de Ventas</h1>
-            <h2>Fecha: {self.report.report_date.strftime('%d/%m/%Y')}</h2>
-            
-            <div class="summary-box">
-                <h3>📋 Resumen General</h3>
-                <p><strong>Estado:</strong> {self.report.report_status}</p>
-                <p><strong>Generado:</strong> {self.report.created_at.strftime('%d/%m/%Y %H:%M:%S')}</p>
-                <p><strong>Total de Ventas:</strong> {totals.get('total_sales', 0)} operaciones</p>
-            </div>
-            
-            <div class="summary-box">
-                <h3>💰 Totales Financieros</h3>
-                <table>
-                    <tr><td><strong>Total Venta USD:</strong></td><td>${totals.get('total_amount_usd', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total Monto Bs:</strong></td><td>Bs. {totals.get('total_amount_bs', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total Monto USD Calculado:</strong></td><td>${totals.get('total_monto_usd_calculado', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total Abono USD:</strong></td><td>${totals.get('total_abono_usd', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total Restante:</strong></td><td>${totals.get('total_restante', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total IVA:</strong></td><td>${totals.get('total_iva', 0):,.2f}</td></tr>
-                    <tr><td><strong>Total Diseño USD:</strong></td><td>${totals.get('total_diseno_usd', 0):,.2f}</td></tr>
-                    <tr class="total-row"><td><strong>Total Ingresos USD:</strong></td><td>${totals.get('total_ingresos_usd', 0):,.2f}</td></tr>
-                </table>
-            </div>
-        """
-        
-        # Resumen por forma de pago
-        if payment_methods:
-            html += """
-            <div class="summary-box">
-                <h3>💳 Resumen por Forma de Pago</h3>
-                <table>
-                    <tr>
-                        <th>Forma de Pago</th>
-                        <th>Cantidad</th>
-                        <th>Venta USD</th>
-                        <th>Monto Bs</th>
-                        <th>Abono USD</th>
-                        <th>Ingresos USD</th>
-                    </tr>
-            """
-            for method, data in payment_methods.items():
-                html += f"""
-                    <tr>
-                        <td>{method}</td>
-                        <td>{data.get('count', 0)}</td>
-                        <td>${data.get('venta_usd', 0):,.2f}</td>
-                        <td>Bs. {data.get('monto_bs', 0):,.2f}</td>
-                        <td>${data.get('abono_usd', 0):,.2f}</td>
-                        <td>${data.get('ingresos_usd', 0):,.2f}</td>
-                    </tr>
-                """
-            html += "</table></div>"
-        
-        # Resumen por asesor
-        if asesores:
-            html += """
-            <div class="summary-box">
-                <h3>👨‍💼 Resumen por Asesor</h3>
-                <table>
-                    <tr>
-                        <th>Asesor</th>
-                        <th>Cantidad</th>
-                        <th>Venta USD</th>
-                        <th>Monto Bs</th>
-                        <th>Abono USD</th>
-                        <th>Ingresos USD</th>
-                    </tr>
-            """
-            for asesor, data in asesores.items():
-                html += f"""
-                    <tr>
-                        <td>{asesor}</td>
-                        <td>{data.get('count', 0)}</td>
-                        <td>${data.get('venta_usd', 0):,.2f}</td>
-                        <td>Bs. {data.get('monto_bs', 0):,.2f}</td>
-                        <td>${data.get('abono_usd', 0):,.2f}</td>
-                        <td>${data.get('ingresos_usd', 0):,.2f}</td>
-                    </tr>
-                """
-            html += "</table></div>"
-        
-        # Ventas detalladas
-        if sales_data:
-            html += """
-            <h2>📊 Ventas Detalladas</h2>
-            <table>
-                <tr>
-                    <th>Orden</th>
-                    <th>Fecha</th>
-                    <th>Artículo</th>
-                    <th>Asesor</th>
-                    <th>Venta USD</th>
-                    <th>Forma Pago</th>
-                    <th>Monto Bs</th>
-                    <th>Abono USD</th>
-                    <th>Restante</th>
-                    <th>Ingresos USD</th>
-                </tr>
-            """
-            for sale in sales_data:
-                html += f"""
-                    <tr>
-                        <td>{sale.get('numero_orden', '')}</td>
-                        <td>{sale.get('fecha', '')[:10]}</td>
-                        <td>{sale.get('articulo', '')}</td>
-                        <td>{sale.get('asesor', '')}</td>
-                        <td>${sale.get('venta_usd', 0):,.2f}</td>
-                        <td>{sale.get('forma_pago', '')}</td>
-                        <td>{f"Bs. {sale.get('monto_bs', 0):,.2f}" if sale.get('monto_bs') else ''}</td>
-                        <td>${sale.get('abono_usd', 0):,.2f}</td>
-                        <td>${sale.get('restante', 0):,.2f}</td>
-                        <td>${sale.get('ingresos_usd', 0):,.2f}</td>
-                    </tr>
-                """
-            html += "</table>"
-        
-        html += """
-        </body>
-        </html>
-        """
-        
-        return html
 
 
 class CustomReportDialog(QDialog):

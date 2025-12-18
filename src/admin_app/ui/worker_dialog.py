@@ -96,10 +96,15 @@ class WorkerDialog(QDialog):
         self.chk_active = QCheckBox("Trabajador Activo")
         self.chk_active.setChecked(True)
         
+        self.edt_assigned_user = QLineEdit()
+        self.edt_assigned_user.setReadOnly(True)
+        self.edt_assigned_user.setPlaceholderText("Sin usuario asignado")
+        
         form.addRow("Cargo / Puesto:", self.edt_job_title)
         form.addRow("Fecha de Ingreso:", self.edt_start_date)
         form.addRow("Salario Base:", self.spin_salary)
         form.addRow(f"Meta ({datetime.now().strftime('%B')}):", self.spin_monthly_goal)
+        form.addRow("Usuario Asignado:", self.edt_assigned_user)
         form.addRow("", self.chk_active)
         
         layout.addLayout(form)
@@ -121,6 +126,13 @@ class WorkerDialog(QDialog):
                     self.spin_salary.setValue(worker.salary)
                     
                 self.chk_active.setChecked(worker.is_active)
+                
+                # Show assigned user if any
+                if worker.user:
+                    status = " (Activo)" if worker.user.is_active else " (Inactivo)"
+                    self.edt_assigned_user.setText(f"{worker.user.username}{status}")
+                else:
+                    self.edt_assigned_user.setText("Sin usuario asignado")
                 
                 # Load current month goal
                 now = datetime.now()

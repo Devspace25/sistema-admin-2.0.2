@@ -6,3 +6,6 @@ reportlab>=4.0
 python-dotenv>=1.0
 psycopg2-binary>=2.9
 psycopg[binary]>=3.1
+
+openpyxl>=3.1
+pywin32>=306

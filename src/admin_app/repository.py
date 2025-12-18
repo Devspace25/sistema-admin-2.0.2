@@ -105,6 +105,26 @@ from .models import (
 # --- Auth API ---
 def create_user(session: Session, *, username: str, password: str, full_name: str | None = None, 
                  default_role_id: int | None = None, is_active: bool = True) -> User:
+    # Check if user exists (active or inactive)
+    existing_user = session.query(User).filter(User.username == username).first()
+    
+    if existing_user:
+        if existing_user.is_active:
+            raise ValueError(f"El usuario '{username}' ya existe y está activo.")
+        
+        # Reactivate and update
+        print(f"DEBUG: Reactivating user {username}")
+        existing_user.is_active = is_active
+        if full_name:
+            existing_user.full_name = full_name
+        existing_user.password_hash = _hash_password(password)
+        if default_role_id is not None:
+            existing_user.default_role_id = default_role_id
+            
+        session.commit()
+        session.refresh(existing_user)
+        return existing_user
+
     user = User(
         username=username, 
         full_name=full_name, 
@@ -250,6 +270,12 @@ def delete_user(session: Session, *, user_id: int) -> bool:
     print(f"DEBUG: Soft deleting user {user_id}")
     u.is_active = False
     
+    # Desvincular de cualquier trabajador asignado
+    worker = session.query(Worker).filter(Worker.user_id == user_id).first()
+    if worker:
+        print(f"DEBUG: Unlinking user {user_id} from worker {worker.id}")
+        worker.user_id = None
+
     # No eliminamos roles ni el registro físico para mantener integridad referencial
     # session.query(UserRole).filter(UserRole.user_id == user_id).delete()
     # session.delete(u)
@@ -1687,7 +1713,7 @@ def check_daily_report_status(session: Session, target_date: Optional[datetime |
 
 def get_daily_sales_data(session: Session, target_date: Optional[datetime | _date] = None, user_filter: Optional[str] = None) -> dict:
     """Obtiene datos de ventas para un día específico."""
-    from datetime import date, datetime as dt
+    from .models import Sale, SalePayment
     
     day = dt.now().date() if target_date is None else (target_date.date() if isinstance(target_date, dt) else target_date)
     
@@ -1702,9 +1728,16 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
         query = query.filter(Sale.asesor == user_filter)
     
     daily_sales = query.all()
+
+    # Obtener pagos de cuentas por cobrar del día
+    payments_query = session.query(SalePayment).filter(
+        SalePayment.payment_date >= dt.combine(day, dt.min.time()),
+        SalePayment.payment_date < dt.combine(day, dt.max.time())
+    )
+    daily_payments = payments_query.all()
     
     # Calcular totales de todos los campos
-    total_sales = len(daily_sales)
+    total_sales = len(daily_sales) # Solo contamos ventas nuevas como "ventas"
     total_amount_usd = sum((sale.venta_usd or 0.0) for sale in daily_sales)
     total_amount_bs = sum((sale.monto_bs or 0.0) for sale in daily_sales)
     total_monto_usd_calculado = sum((sale.monto_usd_calculado or 0.0) for sale in daily_sales)
@@ -1713,11 +1746,19 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
     total_iva = sum((sale.iva or 0.0) for sale in daily_sales)
     total_diseno_usd = sum((sale.diseno_usd or 0.0) for sale in daily_sales)
     total_ingresos_usd = sum((sale.ingresos_usd or 0.0) for sale in daily_sales)
+
+    # Sumar pagos a los totales relevantes
+    for payment in daily_payments:
+        total_abono_usd += payment.amount_usd
+        total_ingresos_usd += payment.amount_usd
+        total_amount_bs += payment.amount_bs
+        # No sumamos a total_amount_usd porque no es nueva venta
     
     # Agrupar por forma de pago con detalles completos
     payment_methods = {}
     asesores_summary = {}
     
+    # Procesar ventas
     for sale in daily_sales:
         # Resumen por forma de pago
         method = sale.forma_pago or "Sin especificar"
@@ -1750,16 +1791,55 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
         asesores_summary[asesor]['monto_bs'] += (sale.monto_bs or 0.0)
         asesores_summary[asesor]['abono_usd'] += (sale.abono_usd or 0.0)
         asesores_summary[asesor]['ingresos_usd'] += (sale.ingresos_usd or 0.0)
+
+    # Procesar pagos
+    for payment in daily_payments:
+        method = payment.payment_method or "Sin especificar"
+        if method not in payment_methods:
+            payment_methods[method] = {
+                'count': 0, 'venta_usd': 0.0, 'monto_bs': 0.0, 
+                'abono_usd': 0.0, 'ingresos_usd': 0.0
+            }
+        payment_methods[method]['count'] += 1
+        payment_methods[method]['abono_usd'] += payment.amount_usd
+        payment_methods[method]['ingresos_usd'] += payment.amount_usd
+        payment_methods[method]['monto_bs'] += payment.amount_bs
+        
+        # Asesor de la venta original
+        sale = payment.sale
+        asesor = sale.asesor if sale else "Sin especificar"
+        if asesor not in asesores_summary:
+             asesores_summary[asesor] = {
+                'count': 0, 'venta_usd': 0.0, 'monto_bs': 0.0,
+                'abono_usd': 0.0, 'ingresos_usd': 0.0
+            }
+        asesores_summary[asesor]['abono_usd'] += payment.amount_usd
+        asesores_summary[asesor]['ingresos_usd'] += payment.amount_usd
+        asesores_summary[asesor]['monto_bs'] += payment.amount_bs
     
     # Serializar los datos de ventas para el reporte
     sales_data = []
     for sale in daily_sales:
+        # Resolver nombre del cliente
+        client_name = sale.cliente or ""
+        if not client_name and sale.cliente_id:
+            # Intentar buscar cliente por ID si no tiene nombre directo
+            # Nota: Esto asume que Customer está importado o disponible en la sesión
+            try:
+                from .models import Customer
+                cust = session.get(Customer, sale.cliente_id)
+                if cust:
+                    client_name = cust.name
+            except Exception:
+                pass
+
         sales_data.append({
             'id': sale.id,
             'numero_orden': sale.numero_orden,
             'fecha': sale.fecha.isoformat(),
             'articulo': sale.articulo,
             'asesor': sale.asesor,
+            'cliente': client_name,
             'venta_usd': sale.venta_usd,
             'forma_pago': sale.forma_pago,
             'serial_billete': sale.serial_billete,
@@ -1776,6 +1856,44 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
             'ingresos_usd': sale.ingresos_usd,
             'notes': sale.notes,
             'created_at': sale.created_at.isoformat()
+        })
+
+    # Agregar pagos a sales_data
+    for payment in daily_payments:
+        sale = payment.sale
+        client_name = sale.cliente or ""
+        if not client_name and sale and sale.cliente_id:
+            try:
+                from .models import Customer
+                cust = session.get(Customer, sale.cliente_id)
+                if cust:
+                    client_name = cust.name
+            except Exception:
+                pass
+        
+        sales_data.append({
+            'id': f"PAY-{payment.id}",
+            'numero_orden': sale.numero_orden if sale else "N/A",
+            'fecha': payment.payment_date.isoformat(),
+            'articulo': "PAGO RESTANTE",
+            'asesor': sale.asesor if sale else "N/A",
+            'cliente': client_name,
+            'venta_usd': 0.0,
+            'forma_pago': payment.payment_method,
+            'serial_billete': None,
+            'banco': payment.bank,
+            'referencia': payment.reference,
+            'fecha_pago': payment.payment_date.isoformat(),
+            'monto_bs': payment.amount_bs,
+            'monto_usd_calculado': 0.0,
+            'tasa_bcv': payment.exchange_rate,
+            'abono_usd': payment.amount_usd,
+            'restante': sale.restante if sale else 0.0,
+            'iva': 0.0,
+            'diseno_usd': 0.0,
+            'ingresos_usd': payment.amount_usd,
+            'notes': f"Pago de deuda",
+            'created_at': payment.payment_date.isoformat()
         })
     
     return {
@@ -1990,7 +2108,7 @@ def get_sales_by_user(session: Session, start_date: Optional[datetime] = None, e
     ]
 
 
-def get_daily_sales_data(session: Session, days_back: int = 7, filter_user: Optional[str] = None) -> dict:
+def get_daily_sales_chart_data(session: Session, days_back: int = 7, filter_user: Optional[str] = None) -> dict:
     """Obtener datos de ventas por día para gráficos."""
     from .models import Sale
     from datetime import datetime, date, timedelta
@@ -2219,11 +2337,14 @@ def list_permissions(session: Session) -> list[Permission]:
     return session.query(Permission).order_by(Permission.code).all()
 
 
-def get_users_with_roles(session: Session) -> list[dict]:
+def get_users_with_roles(session: Session, active_only: bool = True) -> list[dict]:
     """Obtener usuarios con sus roles como texto."""
     users_data = []
-    # Mostrar todos los usuarios ordenados por nombre de usuario
-    users = session.query(User).order_by(User.username).all()
+    # Mostrar usuarios ordenados por nombre de usuario
+    query = session.query(User)
+    if active_only:
+        query = query.filter(User.is_active == True)
+    users = query.order_by(User.username).all()
     
     for user in users:
         roles = get_user_roles(session, user.id)
@@ -3054,3 +3175,49 @@ def get_worker_goals_by_year(session: Session, worker_id: int, year: int) -> lis
         WorkerGoal.worker_id == worker_id,
         WorkerGoal.year == year
     ).order_by(WorkerGoal.month).all()
+
+# --- Cuentas por Cobrar ---
+
+def get_pending_sales(session: Session) -> list[Sale]:
+    """Obtener ventas con saldo pendiente (restante > 0)."""
+    from .models import Sale
+    return session.query(Sale).filter(Sale.restante > 0.01).order_by(Sale.fecha.desc()).all()
+
+def register_payment(session: Session, sale_id: int, amount_usd: float, payment_method: str, 
+                    amount_bs: float = 0.0, exchange_rate: float = 0.0, 
+                    reference: str = None, bank: str = None) -> SalePayment:
+    """Registrar un pago para una venta existente."""
+    from .models import Sale, SalePayment
+    
+    sale = session.get(Sale, sale_id)
+    if not sale:
+        raise ValueError(f"Venta {sale_id} no encontrada")
+        
+    # Crear pago
+    payment = SalePayment(
+        sale_id=sale_id,
+        payment_method=payment_method,
+        amount_usd=amount_usd,
+        amount_bs=amount_bs,
+        exchange_rate=exchange_rate,
+        reference=reference,
+        bank=bank
+    )
+    session.add(payment)
+    
+    # Actualizar venta
+    sale.abono_usd = (sale.abono_usd or 0.0) + amount_usd
+    sale.restante = max(0.0, (sale.restante or 0.0) - amount_usd)
+    
+    # Actualizar ingresos si aplica (si es efectivo o pago inmediato)
+    # Asumimos que todo pago registrado aquí es un ingreso real
+    sale.ingresos_usd = (sale.ingresos_usd or 0.0) + amount_usd
+    
+    session.commit()
+    session.refresh(payment)
+    return payment
+
+def get_payments_history(session: Session, limit: int = 100) -> list[SalePayment]:
+    """Obtener historial de pagos recientes."""
+    from .models import SalePayment, Sale
+    return session.query(SalePayment).join(Sale).order_by(SalePayment.payment_date.desc()).limit(limit).all()

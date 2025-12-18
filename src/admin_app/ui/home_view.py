@@ -566,7 +566,8 @@ class HomeView(QWidget):
 
     def update_daily_chart(self, session, filter_user=None):
         try:
-            daily_data = get_daily_sales_data(session, days_back=7, filter_user=filter_user)
+            from ..repository import get_daily_sales_chart_data
+            daily_data = get_daily_sales_chart_data(session, days_back=7, filter_user=filter_user)
             self.chart.removeAllSeries()
             
             # Remove axes properly

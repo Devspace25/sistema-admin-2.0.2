@@ -101,6 +101,7 @@ class Customer(Base):
     short_address: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(50))
     email: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class Worker(Base):
@@ -110,6 +111,7 @@ class Worker(Base):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Optional link to a system user if they have login access
     user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    user: Mapped["User"] = relationship("User")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
