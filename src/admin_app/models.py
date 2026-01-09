@@ -402,6 +402,10 @@ class Order(Base):
     status: Mapped[str | None] = mapped_column(String(50))  # p.ej., NUEVO, EN_PROCESO, LISTO
     designer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Delivery info
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    delivery_method: Mapped[str | None] = mapped_column(String(50)) # 'OFICINA', 'DELIVERY'
 
     sale: Mapped["Sale"] = relationship("Sale")
     designer: Mapped["User"] = relationship("User", foreign_keys=[designer_id])
@@ -660,3 +664,175 @@ class TalonarioConfig(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"TalonarioConfig(id={self.id!r}, product_id={self.product_id!r}, tipo={self.tipo_talonario_id!r})"
+
+
+# --- Módulo Delivery ---
+
+class DeliveryZone(Base):
+    __tablename__ = "delivery_zones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    price: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"DeliveryZone(name={self.name!r}, price={self.price!r})"
+
+
+class DeliveryPayment(Base):
+    """Registro de pagos semanales a motorizados"""
+    __tablename__ = "delivery_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rider_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    amount_bs: Mapped[float] = mapped_column(Float, default=0.0)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    
+    start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    notes: Mapped[str | None] = mapped_column(Text)
+    
+    rider: Mapped["User"] = relationship("User")
+
+
+class Delivery(Base):
+    __tablename__ = "deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(Integer, ForeignKey("orders.id"), nullable=False)
+    zone_id: Mapped[int] = mapped_column(Integer, ForeignKey("delivery_zones.id"), nullable=False)
+    delivery_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"))
+    
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="PENDIENTE")
+    payment_source: Mapped[str | None] = mapped_column(String(50), default="EMPRESA") # 'EMPRESA' | 'CLIENTE'
+    amount_bs: Mapped[float] = mapped_column(Float, default=0.0) # Monto fijo en Bs para pago a delivery
+    notes: Mapped[str | None] = mapped_column(Text)
+    
+    # Payment tracking
+    payment_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("delivery_payments.id"))
+    
+    # Relationships
+    order: Mapped["Order"] = relationship("Order", backref="delivery")
+    zone: Mapped["DeliveryZone"] = relationship("DeliveryZone")
+    delivery_user: Mapped["User"] = relationship("User")
+    payment_batch: Mapped["DeliveryPayment"] = relationship("DeliveryPayment", backref="deliveries")
+
+    def __repr__(self) -> str:
+        return f"Delivery(id={self.id!r}, order_id={self.order_id!r}, status={self.status!r})"
+
+
+# --- Módulo Contable (Accounting) ---
+
+class Account(Base):
+    """Cuentas financieras (Caja, Banco, etc.)"""
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False) # 'CASH', 'BANK', 'DIGITAL'
+    currency: Mapped[str] = mapped_column(String(10), default="USD", nullable=False) # 'USD', 'VES'
+    balance: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    def __repr__(self) -> str:
+        return f"Account(name={self.name!r}, currency={self.currency!r}, balance={self.balance!r})"
+
+
+class TransactionCategory(Base):
+    """Categorías de ingresos y egresos"""
+    __tablename__ = "transaction_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    type: Mapped[str] = mapped_column(String(20), nullable=False) # 'INCOME', 'EXPENSE'
+    description: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    def __repr__(self) -> str:
+        return f"Category(name={self.name!r}, type={self.type!r})"
+
+
+class Transaction(Base):
+    """Movimientos contables (ingresos, egresos, transferencias)"""
+    __tablename__ = "transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False) # Positive for Income, Negative for Expense usually, or use type. logic handles it.
+    transaction_type: Mapped[str] = mapped_column(String(20), nullable=False) # 'INCOME', 'EXPENSE'
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    
+    # Relationships
+    account_id: Mapped[int] = mapped_column(Integer, ForeignKey("accounts.id"), nullable=False)
+    category_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("transaction_categories.id"), nullable=True)
+    
+    reference: Mapped[str | None] = mapped_column(String(100))
+    
+    # Tracking origin
+    related_table: Mapped[str | None] = mapped_column(String(50)) 
+    related_id: Mapped[int | None] = mapped_column(Integer)
+
+    account: Mapped["Account"] = relationship("Account")
+    category: Mapped["TransactionCategory"] = relationship("TransactionCategory")
+
+    def __repr__(self) -> str:
+        return f"Transaction(id={self.id!r}, type={self.transaction_type!r}, amount={self.amount!r})"
+
+
+
+from sqlalchemy import Date
+
+class Supplier(Base):
+    """Proveedores de la empresa"""
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(150))
+    tax_id: Mapped[str | None] = mapped_column(String(50)) # RIF
+    phone: Mapped[str | None] = mapped_column(String(50))
+    email: Mapped[str | None] = mapped_column(String(200))
+    address: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"Supplier(id={self.id!r}, name={self.name!r})"
+
+class AccountsPayable(Base):
+    """Cuentas por Pagar (Facturas de Proveedores)"""
+    __tablename__ = "accounts_payable"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("suppliers.id"), nullable=True) # Optional for ad-hoc
+    supplier_name: Mapped[str] = mapped_column(String(200), nullable=False) # Fallback or cache
+    
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default='USD') # USD or VES
+    
+    issue_date: Mapped[datetime] = mapped_column(Date, default=datetime.utcnow)
+    due_date: Mapped[datetime | None] = mapped_column(Date)
+    
+    status: Mapped[str] = mapped_column(String(20), default='PENDING', nullable=False) # PENDING, PAID, OVERDUE, CANCELLED
+    
+    # Link to payment transaction if paid
+    transaction_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("transactions.id"), nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    supplier: Mapped["Supplier"] = relationship("Supplier")
+    transaction: Mapped["Transaction"] = relationship("Transaction")
+
+    def __repr__(self) -> str:
+        return f"Bill(id={self.id!r}, to={self.supplier_name!r}, amount={self.amount!r}, status={self.status!r})"

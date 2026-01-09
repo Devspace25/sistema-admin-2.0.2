@@ -1,4 +1,11 @@
 QWidget { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; color: #ffffff; selection-background-color: #243244; selection-color: #e2e8f0; }
+
+/* Dialogs global background to match theme */
+QDialog {
+    background-color: #0b1220;
+    color: #e5e7eb;
+}
+
 #SidebarNav { background: #0f172a; border-right: 1px solid #1e293b; }
 #SidebarNav QPushButton { text-align: left; padding: 10px 12px; border: none; border-radius: 8px; color: #ffffff; background: transparent; }
 #SidebarNav QPushButton:hover { color: #ffffff; }

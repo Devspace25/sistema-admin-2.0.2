@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from sqlalchemy.orm import sessionmaker
 from ..repository import list_customers, add_customers, delete_customer_by_id, update_customer
 from ..models import Customer
+from ..permissions import is_admin_user
 from .customer_dialog import CustomerDialog
 
 
@@ -57,19 +58,28 @@ class CustomersView(QWidget):
     def __init__(self, session_factory: sessionmaker, parent=None) -> None:
         super().__init__(parent)
         self._session_factory = session_factory
+        self._current_user = None
         self._loader: _LoadCustomersThread | None = None
-        self._can_edit = True
-        self._can_delete = True
+        self._can_edit = False
+        self._can_create = False
+        self._can_delete = False
         self._setupUi()
         self.reload_async()
 
+    def set_current_user(self, username: str):
+        self._current_user = username
+
     def set_permissions(self, permissions: set[str]):
         """Configurar permisos de edición y eliminación."""
-        self._can_edit = "edit_customers" in permissions
+        is_admin = is_admin_user(self._session_factory, self._current_user)
+
         self._can_create = "create_customers" in permissions
-        self._can_delete = "edit_customers" in permissions # Asumimos mismo permiso por ahora
+        self._can_edit = is_admin and ("edit_customers" in permissions)
+        self._can_delete = is_admin and ("edit_customers" in permissions)
         
         self.btn_new.setVisible(self._can_create)
+        self.btn_edit.setVisible(self._can_edit)
+        self.btn_delete.setVisible(self._can_delete)
         self._on_selection_changed()
 
     def refresh(self):
@@ -115,6 +125,11 @@ class CustomersView(QWidget):
         self.btn_delete = QPushButton("🗑️ Eliminar", self)
         self.btn_export = QPushButton("📄 Exportar", self)
         self.btn_refresh = QPushButton("🔄 Actualizar", self)
+        
+        # Inicialmente ocultos hasta verificar permisos
+        self.btn_new.setVisible(False)
+        self.btn_edit.setVisible(False)
+        self.btn_delete.setVisible(False)
         
         self.btn_new.clicked.connect(self._on_new)
         self.btn_edit.clicked.connect(self._on_edit)

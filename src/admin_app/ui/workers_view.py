@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from ..repository import list_workers, get_worker_goal, delete_worker
+from ..permissions import is_admin_user
 from .worker_dialog import WorkerDialog
 from .worker_goals_dialog import WorkerGoalsDialog
 
@@ -14,7 +15,8 @@ class WorkersView(QWidget):
     def __init__(self, session_factory: sessionmaker, parent=None):
         super().__init__(parent)
         self.session_factory = session_factory
-        self._can_edit = True  # Default to true, updated by set_permissions
+        self._current_user: str | None = None
+        self._can_edit = False  # Default to False
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -44,17 +46,21 @@ class WorkersView(QWidget):
         
         # Buttons
         self.btn_add = QPushButton("➕ Nuevo Trabajador")
+        self.btn_add.setVisible(False)
         self.btn_add.clicked.connect(self._add_worker)
         
         self.btn_edit = QPushButton("✏️ Editar")
+        self.btn_edit.setVisible(False)
         self.btn_edit.setEnabled(False)
         self.btn_edit.clicked.connect(self._edit_selected)
         
         self.btn_delete = QPushButton("🗑️ Eliminar")
+        self.btn_delete.setVisible(False)
         self.btn_delete.setEnabled(False)
         self.btn_delete.clicked.connect(self._delete_selected)
         
         self.btn_goals = QPushButton("🎯 Metas")
+        self.btn_goals.setVisible(False)
         self.btn_goals.setEnabled(False)
         self.btn_goals.clicked.connect(self._goals_selected)
         
@@ -93,11 +99,18 @@ class WorkersView(QWidget):
         layout.addWidget(self.table)
         
         self.refresh()
+
+    def set_current_user(self, username: str):
+        self._current_user = username
         
     def set_permissions(self, permissions: set[str]):
         """Configurar permisos de edición."""
-        self._can_edit = "edit_workers" in permissions
+        is_admin = is_admin_user(self.session_factory, self._current_user)
+        self._can_edit = is_admin and ("edit_workers" in permissions)
         self.btn_add.setVisible(self._can_edit)
+        self.btn_edit.setVisible(self._can_edit)
+        self.btn_delete.setVisible(self._can_edit)
+        self.btn_goals.setVisible(self._can_edit)
         self._on_selection_changed()  # Re-evaluar estado de botones
         
     def refresh(self):

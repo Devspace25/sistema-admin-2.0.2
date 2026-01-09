@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QAction
+from ..permissions import is_admin_user
 
 
 class SimpleProductsView(QWidget):
@@ -15,14 +16,21 @@ class SimpleProductsView(QWidget):
     def __init__(self, session_factory):
         super().__init__()
         self.session_factory = session_factory
-        self._can_edit = True
+        self._current_user = None
+        self._can_edit = False
+        self._can_create = False
         self._build_ui()
         self._load_products()
 
+    def set_current_user(self, username: str):
+        self._current_user = username
+
     def set_permissions(self, permissions: set[str]):
         """Configurar permisos de edición."""
-        self._can_edit = "edit_products" in permissions
+        is_admin = is_admin_user(self.session_factory, self._current_user)
+
         self._can_create = "create_products" in permissions
+        self._can_edit = is_admin and ("edit_products" in permissions)
         
         self.btn_new.setVisible(self._can_create)
         self.btn_edit.setVisible(self._can_edit)
@@ -66,6 +74,13 @@ class SimpleProductsView(QWidget):
         self.btn_values = QPushButton("📝 Valores")
         self.btn_delete = QPushButton("🗑 Eliminar")
         self.btn_refresh = QPushButton("🔄 Actualizar")
+        
+        # Inicialmente ocultos
+        self.btn_new.setVisible(False)
+        self.btn_edit.setVisible(False)
+        self.btn_parameters.setVisible(False)
+        self.btn_values.setVisible(False)
+        self.btn_delete.setVisible(False)
         
         # Style buttons
         for btn in [self.btn_new, self.btn_edit, self.btn_parameters, self.btn_values, self.btn_delete, self.btn_refresh]:

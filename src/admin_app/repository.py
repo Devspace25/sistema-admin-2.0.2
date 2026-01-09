@@ -97,9 +97,244 @@ from .models import (
     Worker, WorkerGoal,
     SystemConfig,
     CorporeoConfig, CorporeoPayload,
+    Transaction, TransactionCategory, Account, # Added for accounting link
     # EAV
     EavProductType, EavAttribute, EavTypeAttribute, EavAttributeOption, EavProduct, EavValue
 )
+
+
+def _get_or_create_account_by_context(session: Session, method: str, currency: str = 'USD', bank: str = None) -> Account | None:
+    """Helper to find the best matching account for a payment. Creates one if specific bank provided."""
+    method = (method or "").lower()
+    bank_raw = (bank or "").strip()
+    
+    query = session.query(Account).filter(Account.is_active == True)
+    
+    if currency == 'VES':
+        query = query.filter(Account.currency == 'VES')
+        accounts = query.all()
+        
+        # Priority 1: Bank Name Match (if provided)
+        if bank_raw:
+            # Check existing
+            for acc in accounts:
+                if bank_raw.lower() in acc.name.lower():
+                    return acc
+            
+            # Create NEW Bank Account if specific bank name was given
+            # Naming convention: "Banco [Name]"
+            acc_name = bank_raw.title()
+            if "banco" not in acc_name.lower():
+                acc_name = f"Banco {acc_name}"
+                
+            new_acc = Account(
+                name=acc_name,
+                type='bank',
+                currency='VES',
+                balance=0.0,
+                is_active=True
+            )
+            session.add(new_acc)
+            session.flush()
+            return new_acc
+                    
+        # Priority 2: Method keywords (if no bank name)
+        if "efectivo" in method:
+            for acc in accounts:
+                # Look for 'Efectivo' or legacy 'Caja'
+                if "efectivo" in acc.name.lower() or "caja" in acc.name.lower():
+                    return acc
+        
+        # Priority 3: Default fallbacks for common banks if mentioned in method
+        # Check specific company banks
+        lower_method = method.lower()
+        if "venezuela" in lower_method:
+             match = next((a for a in accounts if "venezuela" in a.name.lower()), None)
+             if match: return match
+        if "bancamiga" in lower_method:
+             match = next((a for a in accounts if "bancamiga" in a.name.lower()), None)
+             if match: return match
+        if "banesco" in lower_method:
+             match = next((a for a in accounts if "banesco" in a.name.lower()), None)
+             if match: return match
+
+        # Generic fallbacks
+        for acc in accounts:
+            if "banesco" in acc.name.lower() or "banesco" in method:
+                return acc
+                
+        # Fallback: any VES account (usually Banesco)
+        if accounts: return accounts[0]
+        
+    else: # USD
+        query = query.filter(Account.currency == 'USD')
+        accounts = query.all()
+        
+        # Priority 1: Specific Bank/Platform name
+        if bank_raw:
+             for acc in accounts:
+                if bank_raw.lower() in acc.name.lower():
+                    return acc
+             
+             # Create New USD Account (e.g. "Zelle Juan", "Banesco Panama")
+             acc_name = bank_raw.title()
+             # If it's a bank, maybe prefix? For USD, often user types "Zelle" or "Panama". 
+             # Let's just use what they typed but capitalized.
+             new_acc = Account(
+                name=acc_name,
+                type='bank',
+                currency='USD',
+                balance=0.0,
+                is_active=True
+             )
+             session.add(new_acc)
+             session.flush()
+             return new_acc
+
+        # Priority 2: Method keywords
+        if "efectivo" in method:
+            for acc in accounts:
+                if "efectivo" in acc.name.lower() or "caja" in acc.name.lower():
+                    return acc
+        
+        # Priority 3: Digital (Zelle, etc)
+        # Check Zelle specifically
+        if "zelle" in method:
+             match = next((a for a in accounts if "zelle" in a.name.lower()), None)
+             if match: return match
+
+        if any(x in method for x in ["binance", "paypal", "panamá", "digital"]):
+            for acc in accounts:
+                if "zelle" in acc.name.lower() or "digital" in acc.name.lower():
+                    return acc
+        
+        # Fallback
+        if accounts: return accounts[0]
+            
+    return None
+
+def _sync_payment_to_transaction(session: Session, payment: SalePayment, sale_desc: str = ""):
+    """Creates or links a Transaction to a SalePayment."""
+    if not payment.id:
+        session.flush() # Ensure ID
+        
+    # Check if exists
+    existing = session.query(Transaction).filter(
+        Transaction.related_table == 'sale_payments', 
+        Transaction.related_id == payment.id
+    ).first()
+    
+    if existing: return # Already synced
+    
+    # Determine Currency and Amount
+    method = (payment.payment_method or "").lower()
+    
+    # Keywords that imply VES
+    bs_keywords = ["pago móvil", "pago movil", "transferencia", "punto", "biopago", "bs", "bolivares", "bolívares", "banesco", "venezuela", "mercantil", "provincial", "fondo común", "bancamiga"]
+    
+    is_ves = False
+    if "panamá" in method or "panama" in method or "zelle" in method or "efectivo $" in method or "caja chica (usd)" in method:
+        is_ves = False
+    elif any(k in method for k in bs_keywords):
+        is_ves = True
+    elif method == "efectivo": 
+        # Si dice solo efectivo, asumimos USD, salvo que el monto en Bs sea el único presente
+        if (payment.amount_bs and payment.amount_bs > 0) and (not payment.amount_usd or payment.amount_usd == 0):
+             is_ves = True
+        else:
+             is_ves = False
+
+    target_currency = 'USD'
+    amount = 0.0
+
+    if is_ves:
+        target_currency = 'VES'
+        # 1. Try explicit BS amount
+        if payment.amount_bs and payment.amount_bs > 0:
+            amount = payment.amount_bs
+        # 2. Try converting USD using payment's own rate
+        elif payment.amount_usd and payment.amount_usd > 0 and payment.exchange_rate and payment.exchange_rate > 0:
+            amount = payment.amount_usd * payment.exchange_rate
+        # 3. Try converting using Sale's rate (if payment -> sale link exists)
+        elif payment.amount_usd and payment.amount_usd > 0:
+             # Fetch sale
+             from .models import Sale
+             sale = session.get(Sale, payment.sale_id)
+             if sale and sale.tasa_bcv and sale.tasa_bcv > 0:
+                 amount = payment.amount_usd * sale.tasa_bcv
+             else:
+                 # 4. Fetch current or historical rate
+                 try:
+                     rate = None
+                     if payment.payment_date:
+                        from .exchange import get_rate_for_date
+                        rate = get_rate_for_date(payment.payment_date)
+                     
+                     if not rate:
+                        rate = get_bcv_rate() # Current
+                     
+                     if rate and float(rate) > 0:
+                         amount = payment.amount_usd * float(rate)
+                 except:
+                     pass
+                     
+        # If still 0, something is wrong, but we default to 0 VES
+    else:
+        target_currency = 'USD'
+        # 1. Try explicit USD amount
+        if payment.amount_usd and payment.amount_usd > 0:
+            amount = payment.amount_usd
+        # 2. convert BS to USD if needed (unlikely for USD methods but possible)
+        elif payment.amount_bs and payment.amount_bs > 0:
+             # Try rate
+             rate = payment.exchange_rate
+             if not rate or rate <= 0:
+                  from .models import Sale
+                  sale = session.get(Sale, payment.sale_id)
+                  rate = sale.tasa_bcv if sale else None
+             if not rate:
+                  try:
+                      rate = get_bcv_rate()
+                  except: pass
+             
+             if rate and float(rate) > 0:
+                 amount = payment.amount_bs / float(rate)
+    
+    if amount <= 0:
+         # Log warning or skip?
+         # Skipping 0 transaction
+         return
+
+    # Find Account
+    acc = _get_or_create_account_by_context(session, payment.payment_method, target_currency, payment.bank)
+    if not acc:
+        return # Cannot register without account
+        
+    # Find Category 'Ventas'
+    cat = session.query(TransactionCategory).filter(TransactionCategory.name == "Ventas").first()
+    cat_id = cat.id if cat else None
+    
+    # Create Transaction
+    desc = f"Venta: {sale_desc}"
+    if payment.reference:
+        desc += f" (Ref: {payment.reference})"
+        
+    txn = Transaction(
+        date=payment.payment_date or datetime.utcnow(),
+        amount=amount,
+        transaction_type='INCOME',
+        description=desc,
+        account_id=acc.id,
+        category_id=cat_id,
+        related_table='sale_payments',
+        related_id=payment.id,
+        reference=payment.reference
+    )
+    
+    # Update Account Balance
+    acc.balance += amount
+    
+    session.add(txn)
 
 
 # --- Auth API ---
@@ -450,6 +685,10 @@ def init_db(engine, seed: bool = True) -> None:
         admin_role = ensure_role(session, name="ADMIN", description="Administrador del sistema")
         administracion_role = ensure_role(session, name="ADMINISTRACION", description="Administración con acceso completo a ventas y reportes")
         vendedor_role = ensure_role(session, name="VENDEDOR", description="Vendedor con acceso a clientes, productos, pedidos y ventas")
+        diseniador_role = ensure_role(session, name="DISEÑADOR", description="Diseñador (gestiona flujo de pedidos)")
+        produccion_role = ensure_role(session, name="PRODUCCION", description="Producción (gestiona flujo de pedidos)")
+        disenador_role = ensure_role(session, name="DISEÑADOR", description="Diseñador: acceso a pedidos para diseño")
+        produccion_role = ensure_role(session, name="PRODUCCION", description="Producción: acceso a pedidos para seguimiento")
         # Permisos base
         def ensure_perm(code: str, desc: str) -> Permission:
             p = session.query(Permission).filter(Permission.code == code).first()
@@ -464,15 +703,19 @@ def init_db(engine, seed: bool = True) -> None:
             ("view_home", "Ver página de inicio"),
             # Módulo Clientes
             ("view_customers", "Ver clientes"),
+            ("create_customers", "Crear clientes"),
             ("edit_customers", "Editar clientes"),
             # Módulo Productos
             ("view_products", "Ver productos"),
+            ("create_products", "Crear productos"),
             ("edit_products", "Editar productos"),
             # Módulo Ventas
             ("view_sales", "Ver ventas"),
+            ("create_sales", "Crear ventas"),
             ("edit_sales", "Editar ventas"),
             # Módulo Pedidos
             ("view_orders", "Ver pedidos"),
+            ("create_orders", "Crear pedidos"),
             ("edit_orders", "Editar pedidos"),
             # Módulo Reportes
             ("view_reports", "Ver reportes"),
@@ -506,9 +749,11 @@ def init_db(engine, seed: bool = True) -> None:
             
             if existing_perms_count == 0:
                 administracion_perms = [
-                    "view_home", "view_customers", "edit_customers",
-                    "view_products", "edit_products", "view_sales", "edit_sales",
-                    "view_orders", "edit_orders", "view_reports", "view_daily_reports",
+                    "view_home", "view_customers", "create_customers", "edit_customers",
+                    "view_products", "create_products", "edit_products", 
+                    "view_sales", "create_sales", "edit_sales",
+                    "view_orders", "create_orders", "edit_orders", 
+                    "view_reports", "view_daily_reports",
                     "view_parametros_materiales", "edit_parametros_materiales"
                 ]
                 for perm_code in administracion_perms:
@@ -524,14 +769,68 @@ def init_db(engine, seed: bool = True) -> None:
             
             if existing_perms_count == 0:
                 vendedor_perms = [
-                    "view_home", "view_customers", "edit_customers",
-                    "view_products", "edit_products", "view_sales", "edit_sales", 
-                    "view_orders", "edit_orders"
+                    "view_home", "view_customers", "create_customers",
+                    "view_products", "view_sales", "create_sales",
+                    "view_orders", "create_orders"
                 ]
                 for perm_code in vendedor_perms:
                     perm = session.query(Permission).filter(Permission.code == perm_code).first()
                     if perm:
                         session.add(RolePermission(role_id=vendedor_role.id, permission_id=perm.id))
+
+        # Vincular permisos específicos al rol DISEÑADOR
+        if diseniador_role:
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == diseniador_role.id).count()
+            if existing_perms_count == 0:
+                diseniador_perms = [
+                    "view_home",
+                    "view_orders",
+                    "edit_orders",
+                ]
+                for perm_code in diseniador_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
+                        session.add(RolePermission(role_id=diseniador_role.id, permission_id=perm.id))
+
+        # Vincular permisos específicos al rol PRODUCCION
+        if produccion_role:
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == produccion_role.id).count()
+            if existing_perms_count == 0:
+                produccion_perms = [
+                    "view_home",
+                    "view_orders",
+                    "edit_orders",
+                ]
+                for perm_code in produccion_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
+                        session.add(RolePermission(role_id=produccion_role.id, permission_id=perm.id))
+
+        # Vincular permisos mínimos al rol DISEÑADOR
+        if disenador_role:
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == disenador_role.id).count()
+            if existing_perms_count == 0:
+                disenador_perms = [
+                    "view_home",
+                    "view_orders",
+                ]
+                for perm_code in disenador_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
+                        session.add(RolePermission(role_id=disenador_role.id, permission_id=perm.id))
+
+        # Vincular permisos mínimos al rol PRODUCCION
+        if produccion_role:
+            existing_perms_count = session.query(RolePermission).filter(RolePermission.role_id == produccion_role.id).count()
+            if existing_perms_count == 0:
+                produccion_perms = [
+                    "view_home",
+                    "view_orders",
+                ]
+                for perm_code in produccion_perms:
+                    perm = session.query(Permission).filter(Permission.code == perm_code).first()
+                    if perm:
+                        session.add(RolePermission(role_id=produccion_role.id, permission_id=perm.id))
         
         session.commit()
         # Usuario admin/admin
@@ -1100,13 +1399,21 @@ def add_sale(
         if items:
             from .models import SaleItem
             for item in items:
+                details = item.get('details', {})
+                if not isinstance(details, dict):
+                    details = {}
+                
+                # Persistir descripción específica del item si existe
+                if item.get('description'):
+                    details['description'] = item.get('description')
+
                 si = SaleItem(
                     sale_id=obj.id,
                     product_name=item.get('product_name', 'Unknown'),
                     quantity=float(item.get('quantity', 1.0)),
                     unit_price=float(item.get('unit_price', 0.0)),
                     total_price=float(item.get('total_price', 0.0)),
-                    details_json=json.dumps(item.get('details', {})) if isinstance(item.get('details'), dict) else None
+                    details_json=json.dumps(details)
                 )
                 session.add(si)
 
@@ -1136,6 +1443,11 @@ def add_sale(
                     payment_date=p_date
                 )
                 session.add(sp)
+                # Auto-sync to accounting
+                try:
+                    _sync_payment_to_transaction(session, sp, sale_desc=f"{obj.numero_orden} - {obj.articulo}")
+                except Exception as e:
+                    print(f"Error syncing transaction: {e}")
 
         # Determinar si crear pedido
         # Antes se filtraba por 'corp' o descripción. Ahora, por solicitud del usuario,
@@ -1205,12 +1517,25 @@ def add_sale(
             except Exception:
                 pass
 
+            # Determinar estado inicial según si requiere diseño
+            # Si no incluye diseño y costo diseño es 0, pasa directo a Producción
+            initial_status = 'NUEVO'
+            # Verificar flags. obj.diseno_usd ya tiene el valor asignado
+            has_design = False
+            if incluye_diseno:
+                has_design = True
+            if obj.diseno_usd and obj.diseno_usd > 0:
+                has_design = True
+            
+            if not has_design:
+                initial_status = 'POR_PRODUCIR'
+
             order_obj = Order(
                 sale_id=int(obj.id),
                 order_number=order_number,
                 product_name=(obj.articulo or ''),
                 details_json=json.dumps(details_struct, ensure_ascii=False),
-                status='NUEVO'
+                status=initial_status
             )
             session.add(order_obj)
             # Flush para asignar ID a order_obj (si esto falla, la excepción propagará y haremos rollback)
@@ -1277,20 +1602,42 @@ def update_sale(session: Session, sale_id: int, **fields) -> bool:
             
             # Crear nuevos items
             for item_dict in items_data:
+                details = item_dict.get('details', {})
+                if not isinstance(details, dict):
+                    details = {}
+                
+                # Persistir descripción específica del item si existe
+                if item_dict.get('description'):
+                    details['description'] = item_dict.get('description')
+
                 new_item = SaleItem(
                     product_name=item_dict.get('product_name', 'Desconocido'),
                     quantity=float(item_dict.get('quantity', 1.0)),
                     unit_price=float(item_dict.get('unit_price', 0.0)),
                     total_price=float(item_dict.get('total_price', 0.0)),
-                    details_json=json.dumps(item_dict.get('details', {}), ensure_ascii=False) if item_dict.get('details') else None
+                    details_json=json.dumps(details, ensure_ascii=False)
                 )
                 obj.items.append(new_item)
 
     if 'payments' in fields:
         payments_data = fields.pop('payments')
         if isinstance(payments_data, list):
-            # Eliminar pagos existentes
+            # Eliminar pagos existentes Y sus transacciones vinculadas
             for pay in obj.payments:
+                # Find linked transaction
+                txn = session.query(Transaction).filter(
+                    Transaction.related_table == 'sale_payments',
+                    Transaction.related_id == pay.id
+                ).first()
+                if txn:
+                    # Reverse balance effect
+                    if txn.account:
+                        if txn.transaction_type == 'INCOME':
+                            txn.account.balance -= txn.amount
+                        else:
+                            txn.account.balance += txn.amount
+                    session.delete(txn)
+                
                 session.delete(pay)
             obj.payments = [] # Limpiar relación en memoria
             
@@ -1315,7 +1662,14 @@ def update_sale(session: Session, sale_id: int, **fields) -> bool:
                     bank=pay_dict.get('bank'),
                     payment_date=p_date
                 )
-                obj.payments.append(new_pay)
+                obj.payments.append(new_pay) # Add to relationship
+                session.add(new_pay) # Ensure added to session
+                
+                # Auto-sync
+                try:
+                    _sync_payment_to_transaction(session, new_pay, sale_desc=f"{obj.numero_orden} - {obj.articulo}")
+                except Exception as e:
+                    print(f"Error syncing transaction in update: {e}")
 
     # Actualizar campos simples
     for k, v in fields.items():
@@ -1360,17 +1714,40 @@ def update_sale(session: Session, sale_id: int, **fields) -> bool:
     return True
 
 
+def _remove_payment_transaction(session: Session, payment_id: int):
+    txn = session.query(Transaction).filter(
+        Transaction.related_table == 'sale_payments',
+        Transaction.related_id == payment_id
+    ).first()
+    if txn:
+        # Reverse balance
+        if txn.account:
+             if txn.transaction_type == 'INCOME':
+                 txn.account.balance -= txn.amount
+             else:
+                 txn.account.balance += txn.amount
+        session.delete(txn)
+
 def delete_sale_by_id(session: Session, sale_id: int) -> bool:
     obj = session.get(Sale, sale_id)
     if not obj:
         return False
     
+    # Clean up Transactions linked to payments
+    for pay in obj.payments:
+         _remove_payment_transaction(session, pay.id)
+
     # Delete associated orders first to maintain consistency
     orders = session.query(Order).filter(Order.sale_id == sale_id).all()
+    from .models import Delivery
     for order in orders:
         # Also clean up Corporeo payloads/configs linked to this order
         session.query(CorporeoPayload).filter(CorporeoPayload.order_id == order.id).delete()
         session.query(CorporeoConfig).filter(CorporeoConfig.order_id == order.id).delete()
+
+        # Delete Delivery linked to order if existing (fixes IntegrityError on NotNullViolation)
+        session.query(Delivery).filter(Delivery.order_id == order.id).delete()
+
         session.delete(order)
     
     # Clean up any Corporeo payloads/configs linked directly to the sale (if any remain)
@@ -1715,12 +2092,12 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
     """Obtiene datos de ventas para un día específico."""
     from .models import Sale, SalePayment
     
-    day = dt.now().date() if target_date is None else (target_date.date() if isinstance(target_date, dt) else target_date)
+    day = datetime.now().date() if target_date is None else (target_date.date() if isinstance(target_date, datetime) else target_date)
     
     # Obtener ventas del día con filtro opcional por usuario
     query = session.query(Sale).filter(
-    Sale.fecha >= dt.combine(day, dt.min.time()),
-    Sale.fecha < dt.combine(day, dt.max.time())
+    Sale.fecha >= datetime.combine(day, datetime.min.time()),
+    Sale.fecha < datetime.combine(day, datetime.max.time())
     )
     
     # Aplicar filtro por asesor/usuario si se especifica
@@ -1731,8 +2108,8 @@ def get_daily_sales_data(session: Session, target_date: Optional[datetime | _dat
 
     # Obtener pagos de cuentas por cobrar del día
     payments_query = session.query(SalePayment).filter(
-        SalePayment.payment_date >= dt.combine(day, dt.min.time()),
-        SalePayment.payment_date < dt.combine(day, dt.max.time())
+        SalePayment.payment_date >= datetime.combine(day, datetime.min.time()),
+        SalePayment.payment_date < datetime.combine(day, datetime.max.time())
     )
     daily_payments = payments_query.all()
     
@@ -3221,3 +3598,75 @@ def get_payments_history(session: Session, limit: int = 100) -> list[SalePayment
     """Obtener historial de pagos recientes."""
     from .models import SalePayment, Sale
     return session.query(SalePayment).join(Sale).order_by(SalePayment.payment_date.desc()).limit(limit).all()
+
+
+def get_assigned_orders(session: Session, user_id: int) -> list[Order]:
+    """Obtiene los pedidos asignados a un usuario (diseñador)."""
+    from .models import Order
+    return session.query(Order).filter(Order.designer_id == user_id).order_by(Order.created_at.desc()).all()
+
+
+def get_pending_orders_for_user(session: Session, user_id: int) -> list[Order]:
+    """
+    Obtiene pedidos pendientes según el rol del usuario:
+    - DISEÑADOR: Pedidos asignados en estado NUEVO o DISEÑO.
+    - PRODUCCION: Pedidos en estado PRODUCCION o EN_PRODUCCION.
+    - VENDEDOR (o cualquiera): Pedidos de sus ventas en estado LISTO.
+    """
+    from .models import Order, User, Sale
+    
+    user = session.get(User, user_id)
+    if not user:
+        return []
+    
+    orders = []
+    
+    # 1. Rol DISEÑADOR
+    if user_has_role(session, user_id=user.id, role_name="DISEÑADOR"):
+        designer_orders = (
+            session.query(Order)
+            .filter(Order.designer_id == user.id)
+            .filter(Order.status.in_(["NUEVO", "DISEÑO"]))
+            .order_by(Order.created_at.asc())
+            .all()
+        )
+        orders.extend(designer_orders)
+        
+    # 2. Rol PRODUCCION
+    if user_has_role(session, user_id=user.id, role_name="PRODUCCION"):
+        prod_orders = (
+            session.query(Order)
+            .filter(Order.status.in_(["POR_PRODUCIR", "PRODUCCION", "EN_PRODUCCION"]))
+            .order_by(Order.created_at.asc())
+            .all()
+        )
+        # Evitar duplicados si el usuario tiene ambos roles (raro pero posible)
+        existing_ids = {o.id for o in orders}
+        for o in prod_orders:
+            if o.id not in existing_ids:
+                orders.append(o)
+                existing_ids.add(o.id)
+
+    # 3. Vendedor (Dueño de la venta) - Ver pedidos LISTOS para entregar
+    # Asumimos que 'asesor' en Sale coincide con user.username o user.full_name
+    # O mejor, si tenemos user_id en Sale (no lo tenemos, es string 'asesor').
+    # Usaremos el username para filtrar.
+    seller_orders = (
+        session.query(Order)
+        .join(Sale)
+        .filter(Sale.asesor == user.username)
+        .filter(Order.status == "LISTO")
+        .order_by(Order.created_at.asc())
+        .all()
+    )
+    
+    existing_ids = {o.id for o in orders}
+    for o in seller_orders:
+        if o.id not in existing_ids:
+            orders.append(o)
+            existing_ids.add(o.id)
+            
+    # Ordenar todo por fecha (más antiguos primero para atenderlos antes)
+    orders.sort(key=lambda x: x.created_at)
+    
+    return orders

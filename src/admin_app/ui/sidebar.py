@@ -1,8 +1,58 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Signal, Qt, QRect
+from PySide6.QtGui import QIcon, QPainter, QColor, QBrush
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSizePolicy, QSpacerItem, QLabel
+
+
+class NotificationButton(QPushButton):
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self._notification_count = 0
+
+    def set_notification(self, count: int | bool):
+        # Allow bool for compatibility (True=1, False=0)
+        target = 0
+        if isinstance(count, bool):
+            target = 1 if count else 0
+        else:
+            target = int(count)
+            
+        if self._notification_count != target:
+            self._notification_count = target
+            self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._notification_count > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # config text
+            text = str(self._notification_count)
+            if self._notification_count > 99:
+                text = "99+"
+            
+            # Badge size
+            size = 18
+            margin = 5
+            
+            # Top-right position
+            rect = QRect(self.width() - size - margin, margin, size, size)
+            
+            # Orange background #FF6900
+            painter.setBrush(QBrush(QColor("#FF6900")))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(rect)
+            
+            # Text white centered
+            painter.setPen(QColor(Qt.GlobalColor.white))
+            font = painter.font()
+            font.setBold(True)
+            # Adjust font size to fit
+            font.setPixelSize(10)
+            painter.setFont(font)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
 class SidebarNav(QWidget):
@@ -17,7 +67,7 @@ class SidebarNav(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        self._buttons: dict[str, QPushButton] = {}
+        self._buttons: dict[str, NotificationButton] = {}
 
         # Rótulo con usuario (si MainWindow lo expone). Se actualizará en construcción.
         try:
@@ -35,6 +85,10 @@ class SidebarNav(QWidget):
             "productos": "assets/icons/box.svg",
             "ventas": "assets/icons/cart.svg",
             "cuentas_por_cobrar": "assets/icons/clipboard.svg",
+            "cuentas_por_pagar": "assets/icons/clipboard.svg",
+            "contabilidad": "assets/icons/book.svg",
+            "entregas": "assets/icons/truck.svg",
+            "zonas": "assets/icons/map.svg",
             "reportes_diarios": "assets/icons/chart.svg",
             "pedidos": "assets/icons/clipboard.svg",
             "trabajadores": "assets/icons/users.svg",
@@ -46,12 +100,15 @@ class SidebarNav(QWidget):
             ("productos", "Productos"),
             ("ventas", "Ventas"),
             ("cuentas_por_cobrar", "Cuentas por Cobrar"),
+            ("cuentas_por_pagar", "Cuentas por Pagar"),
+            ("contabilidad", "Contabilidad"),
+            ("entregas", "Delivery"),
             ("reportes_diarios", "Reportes Diarios"),
             ("pedidos", "Pedidos"),
             ("trabajadores", "Trabajadores"),
             ("configuracion", "Configuración"),
         ]:
-            btn = QPushButton(text, self)
+            btn = NotificationButton(text, self)
             btn.setObjectName(f"nav_{key}")
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, k=key: self._on_click(k))
@@ -81,6 +138,13 @@ class SidebarNav(QWidget):
         layout.addWidget(self._btn_logout)
 
         self.select_module("home")
+    
+    def set_notification(self, key: str, count: int | bool) -> None:
+        """Activa o desactiva la notificación (badge con número) en el botón del módulo."""
+        btn = self._buttons.get(key)
+        if btn and hasattr(btn, 'set_notification'):
+            btn.set_notification(count)
+
 
     def _on_click(self, key: str) -> None:
         self.select_module(key)

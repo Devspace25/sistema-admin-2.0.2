@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from sqlalchemy.orm import sessionmaker
 import json
+import os
 from pathlib import Path
 
 from ..repository import (
@@ -15,70 +16,98 @@ from ..repository import (
     list_users, get_order_full, user_has_role
 )
 from ..models import User
+from ..permissions import is_admin_user
 from ..events import events
 from .order_details_dialog import OrderDetailsDialog
+from zoneinfo import ZoneInfo
+from datetime import timezone
 
 COLUMNS = [
     "Fecha",         # created_at
     "N° Orden",      # order_number
     "Asesor",        # sale.asesor
     "Diseñador",     # designer (Button or Name)
-    "Estado",        # status (ComboBox)
+    "Estado",        # status (Label)
+    "Entregado El",  # delivered_at
+    "Entrega",       # delivery_method
     "Producto",      # product_name
     "Descripción",   # sale.descripcion
 ]
 
+def format_date_caracas(dt):
+    if not dt:
+        return "-"
+    # Si es naive, asumimos que ya está en hora correcta (local) o UTC.
+    # Ante la duda de migraciones mixtas, lo convertimos explícitamente si tiene tz.
+    # Para cumplir requerimiento "Zona horaria Caracas":
+    utc = ZoneInfo("UTC")
+    caracas = ZoneInfo("America/Caracas")
+    
+    if dt.tzinfo is None:
+        # Asumir que lo guardado está en UTC (práctica recomendada) para poder convertir
+        # Si resulta que se guardó en local, esto restará 4h.
+        # Ajuste: Si se usó datetime.now() local, no deberíamos convertir.
+        # Pero para estandarizar, lo trataremos.
+        # Al no tener certeza del origen (legacy vs nuevo), aplicamos solo formato español
+        # para visualización limpia, y conversión si viene aware.
+        pass
+    else:
+        dt = dt.astimezone(caracas)
+        
+    return dt.strftime('%d/%m/%Y %I:%M %p')
+
 class OrderStatusWidget(QWidget):
-    def __init__(self, current_status: str, order_id: int, callback, parent=None):
+    def __init__(self, current_status: str, order_id: int, callback=None, parent=None):
         super().__init__(parent)
         self.order_id = order_id
-        self.callback = callback
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
         
-        self.combo = QComboBox()
-        self.combo.addItems(["NUEVO", "DISEÑO", "EN PROCESO", "LISTO", "ENTREGADO"])
-        self.combo.setCurrentText(current_status)
-        self.combo.currentTextChanged.connect(self._on_change)
+        # Label instead of Combo
+        self.lbl_status = QLabel(current_status or "NUEVO")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setStyleSheet("font-weight: bold; font-size: 11px;")
         
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(6)
+        self.progress.setFixedHeight(4)
         self.progress.setRange(0, 100)
         
         self._update_visuals(current_status)
         
-        layout.addWidget(self.combo)
+        layout.addWidget(self.lbl_status)
         layout.addWidget(self.progress)
-        
-    def _on_change(self, text):
-        self._update_visuals(text)
-        if self.callback:
-            self.callback(self.order_id, text)
             
     def _update_visuals(self, status):
         mapping = {
             "NUEVO": 5,
             "DISEÑO": 25,
-            "EN PROCESO": 50,
+            "POR_PRODUCIR": 40,
+            "PRODUCCION": 45,
+            "EN_PRODUCCION": 60,
             "LISTO": 85,
             "ENTREGADO": 100
         }
-        val = mapping.get(status, 0)
+        status_norm = status.replace(" ", "_") # Handle "EN PROCESO" legacy
+        val = mapping.get(status, mapping.get(status_norm, 0))
         self.progress.setValue(val)
         
         # Colors
         colors = {
             "NUEVO": "#9E9E9E",      # Grey
             "DISEÑO": "#9C27B0",     # Purple
-            "EN PROCESO": "#2196F3", # Blue
+            "POR_PRODUCIR": "#E91E63", # Pink
+            "PRODUCCION": "#E91E63",   # Pink
+            "EN_PRODUCCION": "#2196F3", # Blue
             "LISTO": "#FF9800",      # Orange
             "ENTREGADO": "#4CAF50"   # Green
         }
-        col = colors.get(status, "#2196F3")
-        self.progress.setStyleSheet(f"QProgressBar::chunk {{ background-color: {col}; border-radius: 3px; }} QProgressBar {{ border: 1px solid #ddd; border-radius: 3px; background: #f0f0f0; }}")
+        col = colors.get(status, colors.get(status_norm, "#2196F3"))
+        
+        self.lbl_status.setStyleSheet(f"color: {col}; font-weight: bold;")
+        self.progress.setStyleSheet(f"QProgressBar::chunk {{ background-color: {col}; border-radius: 2px; }} QProgressBar {{ border: none; background: #e0e0e0; height: 4px; }}")
 
 class _LoadOrdersThread(QThread):
     loaded = Signal(list)
@@ -106,7 +135,9 @@ class _LoadOrdersThread(QThread):
                         'details_json': o.details_json,
                         'designer_id': o.designer_id,
                         'designer_name': o.designer.username if o.designer else None,
-                        'requires_design': (o.sale.diseno_usd or 0) > 0 if o.sale else False
+                        'requires_design': (o.sale.diseno_usd or 0) > 0 if o.sale else False,
+                        'delivered_at': format_date_caracas(getattr(o, 'delivered_at', None)),
+                        'delivery_method': o.delivery_method or '-'
                     })
                 self.loaded.emit(rows)
         except Exception as e:
@@ -120,8 +151,8 @@ class OrdersView(QWidget):
         self._current_user = current_user
         self._loading = False
         self._orders_data = [] # Store data for filtering
-        self._can_edit = True
-        self._can_delete = True
+        self._can_edit = False  # ediciones de flujo (estado/asignación)
+        self._can_delete = False  # eliminación (solo ADMIN)
 
         # Layout
         layout = QVBoxLayout(self)
@@ -145,6 +176,7 @@ class OrdersView(QWidget):
         
         self.btn_delete = QPushButton("🗑️ Eliminar", self)
         self.btn_delete.clicked.connect(self._on_delete)
+        self.btn_delete.setVisible(False)
         
         header_layout.addWidget(QLabel("Buscar:"))
         header_layout.addWidget(self.search, 1)
@@ -165,9 +197,16 @@ class OrdersView(QWidget):
         # Resize columns
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.Stretch) # Description stretches
-        # Set minimum width for columns to avoid being too narrow
-        header.setMinimumSectionSize(120)
+        
+        # 'Descripción' is the last column (index 8), so let it stretch
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        
+        # Specific tuning
+        # Column 6 'Método' doesn't need to be huge
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+
+        # Set minimum width for columns generally
+        header.setMinimumSectionSize(90)
         
         # Set default row height to accommodate the status widget
         self._table.verticalHeader().setDefaultSectionSize(50)
@@ -193,8 +232,12 @@ class OrdersView(QWidget):
 
     def set_permissions(self, permissions: set[str]):
         """Configurar permisos de edición y eliminación."""
+        is_admin = is_admin_user(self._session_factory, self._current_user)
+
+        # Permite editar flujo (estado/asignación) por permiso.
         self._can_edit = "edit_orders" in permissions
-        self._can_delete = "edit_orders" in permissions # Asumimos mismo permiso
+        # Eliminar solo para ADMIN (aunque tenga edit_orders).
+        self._can_delete = is_admin and ("edit_orders" in permissions)
         
         self.btn_delete.setVisible(self._can_delete)
         # Refrescar tabla para actualizar widgets de estado y diseñador
@@ -294,19 +337,28 @@ class OrdersView(QWidget):
                 item_na.setTextAlignment(Qt.AlignCenter)
                 self._table.setItem(i, 3, item_na)
             
-            # Status (Widget with Progress)
-            status_widget = OrderStatusWidget(row['status'], row['id'], self._update_status)
-            status_widget.combo.setEnabled(self._can_edit)
+            # Status (Widget with Progress - Automatic, ReadOnly)
+            status_widget = OrderStatusWidget(row['status'], row['id'])
             self._table.setCellWidget(i, 4, status_widget)
+            
+            # Delivered At
+            item_del_at = QTableWidgetItem(row['delivered_at'])
+            item_del_at.setTextAlignment(Qt.AlignCenter)
+            self._table.setItem(i, 5, item_del_at)
+            
+            # Delivery Method
+            item_del_meth = QTableWidgetItem(row['delivery_method'])
+            item_del_meth.setTextAlignment(Qt.AlignCenter)
+            self._table.setItem(i, 6, item_del_meth)
             
             # Product
             item_prod = QTableWidgetItem(row['product_name'])
-            self._table.setItem(i, 5, item_prod)
+            self._table.setItem(i, 7, item_prod)
 
             # Description
             item_desc = QTableWidgetItem(row['description'])
             item_desc.setToolTip(row['description'])  # Show full text on hover
-            self._table.setItem(i, 6, item_desc)
+            self._table.setItem(i, 8, item_desc)
             
             # Store ID in the first item
             item_date.setData(Qt.UserRole, row['id'])
@@ -394,6 +446,9 @@ class OrdersView(QWidget):
             QMessageBox.information(self, "Pedidos", f"No se pudo abrir el detalle: {e}")
 
     def _on_delete(self) -> None:
+        if not self._can_delete:
+            QMessageBox.information(self, "Pedidos", "No tienes permisos para eliminar pedidos.")
+            return
         sid = self._selected_id()
         if sid is None:
             return
@@ -483,8 +538,19 @@ class OrdersView(QWidget):
                         # Calcular total en Bs si hay tasa, sino usar 0 o el valor en USD si se prefiere (aquí asumimos Bs)
                         total_bs = (item.total_price or 0.0) * tasa
                         
-                        # Usar descripción de la venta si existe, de lo contrario usar el nombre del producto
-                        description_text = sale.descripcion if sale.descripcion else item.product_name
+                        # Intentar obtener descripción específica del item desde details_json
+                        item_desc = None
+                        if item.details_json:
+                            try:
+                                details = json.loads(item.details_json)
+                                if isinstance(details, dict):
+                                    item_desc = details.get('description')
+                            except Exception:
+                                pass
+                        
+                        # Usar descripción específica del item, o fallback al nombre del producto
+                        # Evitar usar sale.descripcion para items individuales para prevenir duplicidad
+                        description_text = item_desc if item_desc else item.product_name
                         
                         order_info['items'].append({
                             'qty': item.quantity,
@@ -511,6 +577,12 @@ class OrdersView(QWidget):
             path = print_ticket_excel_pdf(order_info, Path(save_path))
             
             QMessageBox.information(self, "Pedidos", f"Ticket generado en:\n{path}")
+            
+            # Abrir automáticamente
+            try:
+                os.startfile(path)
+            except Exception as e:
+                print(f"No se pudo abrir el archivo automáticamente: {e}")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo imprimir el ticket: {e}")

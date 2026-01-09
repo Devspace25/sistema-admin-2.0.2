@@ -814,62 +814,47 @@ def _excel_to_pdf(excel_path: Path, pdf_path: Path):
     try:
         # Intentar cambiar a una impresora que soporte Carta (Microsoft Print to PDF)
         # Esto evita que Excel use la configuración de la impresora térmica (80mm)
-        target_printer = "Microsoft Print to PDF"
-        printer_set = False
+        # target_printer = "Microsoft Print to PDF"
+        # printer_set = False
         
-        try:
-            printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
-            for p in printers:
-                name = p[2]
-                if name == target_printer:
-                    handle = win32print.OpenPrinter(name)
-                    info = win32print.GetPrinter(handle, 2)
-                    win32print.ClosePrinter(handle)
-                    port = info['pPortName']
-                    
-                    # Excel necesita "Nombre en Puerto"
-                    # Probamos formatos comunes
-                    candidates = [
-                        f"{name} on {port}",
-                        f"{name} on {port.rstrip(':')}:",
-                        name
-                    ]
-                    
-                    for c in candidates:
-                        try:
-                            excel.ActivePrinter = c
-                            printer_set = True
-                            break
-                        except:
-                            continue
-                    if printer_set:
-                        break
-        except Exception:
-            pass # Si falla, seguimos con la impresora por defecto
-
+        # COMENTADO: Si queremos respetar el formato del Excel (que ya está en 80mm),
+        # no deberíamos forzar una impresora que usa Carta por defecto.
+        # Dejamos que use la impresora predeterminada (que podría ser la térmica)
+        # o simplemente confiamos en que ExportAsFixedFormat use la config de página del Excel.
+        pass
+        
         wb = excel.Workbooks.Open(str(excel_path.resolve()))
         
         # Forzar configuración de página vía COM
         ws = wb.ActiveSheet
         try:
-            # xlPaperLetter = 1
-            ws.PageSetup.PaperSize = 1 
-            # xlLandscape = 2
-            ws.PageSetup.Orientation = 2
+            # No forzar tamaño carta (xlPaperLetter = 1) si queremos 80mm
+            # Si el Excel ya tiene el tamaño correcto, no deberíamos tocar PaperSize
+            # O si queremos forzarlo, deberíamos buscar el ID de papel custom o similar.
+            # Pero el usuario dice que el Excel ya es el formato.
+            
+            # Comentamos PaperSize para respetar el del archivo
+            # ws.PageSetup.PaperSize = 1 
+            
+            # Orientación: xlPortrait = 1, xlLandscape = 2
+            # Para ticket suele ser Portrait
+            # ws.PageSetup.Orientation = 1
+            
             # Zoom = False para permitir FitToPages
             ws.PageSetup.Zoom = False
             ws.PageSetup.FitToPagesWide = 1
-            ws.PageSetup.FitToPagesTall = 1
+            ws.PageSetup.FitToPagesTall = False # Permitir que crezca verticalmente
             
             # Márgenes (en puntos, 1 cm ~= 28.35 pt)
-            # 0.1 cm ~= 3 pt
-            ws.PageSetup.LeftMargin = 3
-            ws.PageSetup.RightMargin = 3
-            ws.PageSetup.TopMargin = 3
-            ws.PageSetup.BottomMargin = 3
-            ws.PageSetup.HeaderMargin = 0
-            ws.PageSetup.FooterMargin = 0
-            ws.PageSetup.CenterHorizontally = True
+            # Respetar márgenes del Excel si es posible, o poner mínimos
+            # ws.PageSetup.LeftMargin = 0
+            # ws.PageSetup.RightMargin = 0
+            # ws.PageSetup.TopMargin = 0
+            # ws.PageSetup.BottomMargin = 0
+            # ws.PageSetup.HeaderMargin = 0
+            # ws.PageSetup.FooterMargin = 0
+            # ws.PageSetup.CenterHorizontally = True
+            pass
             
         except Exception:
             pass

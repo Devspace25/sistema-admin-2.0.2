@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
     QScrollArea, QDialog, QFormLayout, QDoubleSpinBox, QDialogButtonBox, 
     QMessageBox, QGraphicsDropShadowEffect, QGridLayout, QProgressBar,
-    QSizePolicy, QGroupBox
+    QSizePolicy, QGroupBox, QComboBox
 )
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QBarSeries, QBarSet, QValueAxis, QBarCategoryAxis
 from PySide6.QtGui import QPainter, QFont, QColor, QIcon, QPixmap, QBrush, QLinearGradient
@@ -15,8 +15,11 @@ import os
 
 from ..repository import (
     get_dashboard_kpis, get_sales_by_user, get_weekly_sales_data, get_daily_sales_data,
-    get_monthly_sales_goal, set_monthly_sales_goal, set_user_monthly_goal
+    get_monthly_sales_goal, set_monthly_sales_goal, set_user_monthly_goal,
+    get_pending_orders_for_user, user_has_role, update_order
 )
+from .deliveries_view import CreateDeliveryDialog
+from ..models import Delivery
 
 # --- Utils ---
 def get_icon_path(name: str) -> str:
@@ -24,73 +27,6 @@ def get_icon_path(name: str) -> str:
     # Adjust path based on your project structure
     base_path = os.path.join(os.path.dirname(__file__), "..", "assets", "icons")
     return os.path.join(base_path, name)
-
-class QuickActionsWidget(QFrame):
-    action_requested = Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: white;
-                border-radius: 12px;
-            }
-            QPushButton {
-                background-color: #f8f9fa;
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 12px;
-                text-align: left;
-                font-size: 13px;
-                color: #2c3e50;
-            }
-            QPushButton:hover {
-                background-color: #eef2f7;
-                border-color: #d0d0d0;
-            }
-            QLabel {
-                color: #7f8c8d;
-                font-weight: bold;
-                font-size: 12px;
-                margin-bottom: 5px;
-            }
-        """)
-        
-        # Shadow
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 30))
-        shadow.setYOffset(2)
-        self.setGraphicsEffect(shadow)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(10)
-        
-        title = QLabel("ACCESOS RÁPIDOS")
-        layout.addWidget(title)
-        
-        # Actions
-        actions = [
-            ("🛒 Nueva Venta", "ventas"),
-            ("👥 Nuevo Cliente", "clientes"),
-            ("📦 Nuevo Pedido", "pedidos"),
-            ("📊 Ver Reportes", "reportes_diarios")
-        ]
-        
-        grid = QGridLayout()
-        grid.setSpacing(10)
-        
-        for i, (text, route) in enumerate(actions):
-            btn = QPushButton(text)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMaximumWidth(300) # Prevent buttons from getting too wide
-            btn.clicked.connect(lambda checked=False, r=route: self.action_requested.emit(r))
-            grid.addWidget(btn, i // 2, i % 2)
-            
-        layout.addLayout(grid)
-        layout.addStretch()
 
 class ModernKpiCard(QFrame):
     def __init__(self, title: str, value: str, icon_name: str, color: str, parent=None) -> None:
@@ -319,6 +255,345 @@ class UserGoalsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error guardando metas: {e}")
 
+class OrderListItem(QFrame):
+    status_change_requested = Signal(int, str, dict) # Added params for extra data
+
+    def __init__(self, order, parent=None):
+        super().__init__(parent)
+        self.order_id = order.id
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: white;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QFrame:hover {
+                background-color: #f9f9f9;
+            }
+        """)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(15)
+        
+        # 1. Order Number
+        order_lbl = QLabel(f"{order.order_number}")
+        order_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        order_lbl.setStyleSheet("color: #2c3e50;")
+        order_lbl.setFixedWidth(120)
+        
+        # 2. Product Name
+        prod_lbl = QLabel(order.product_name)
+        prod_lbl.setFont(QFont("Segoe UI", 9))
+        prod_lbl.setStyleSheet("color: #555;")
+        
+        # 3. Date
+        date_str = order.created_at.strftime("%d/%m/%Y")
+        date_lbl = QLabel(date_str)
+        date_lbl.setFont(QFont("Segoe UI", 9))
+        date_lbl.setStyleSheet("color: #7f8c8d;")
+        date_lbl.setFixedWidth(80)
+        date_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # 4. Status Badge
+        status_text = order.status or "NUEVO"
+        status_lbl = QLabel(status_text)
+        status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_lbl.setFixedSize(100, 24)
+        
+        # Status Colors
+        bg_color = "#ecf0f1"
+        text_color = "#7f8c8d"
+        
+        if status_text == "NUEVO":
+            bg_color = "#e3f2fd"
+            text_color = "#2196f3"
+        elif status_text == "DISEÑO":
+            bg_color = "#fff3e0"
+            text_color = "#ff9800"
+        elif status_text == "PRODUCCION" or status_text == "POR_PRODUCIR":
+            bg_color = "#fce4ec"
+            text_color = "#e91e63"
+        elif status_text == "EN_PRODUCCION":
+            bg_color = "#e8f5e9"
+            text_color = "#4caf50"
+        elif status_text == "LISTO":
+            bg_color = "#e0f2f1"
+            text_color = "#009688"
+            
+        status_lbl.setStyleSheet(f"""
+            background-color: {bg_color};
+            color: {text_color};
+            border-radius: 12px;
+            font-weight: bold;
+            font-size: 11px;
+        """)
+        
+        # 5. Action Button
+        action_btn = QPushButton()
+        action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        action_btn.setFixedSize(100, 30)
+        
+        # Determine button action
+        btn_text, next_status, btn_style = self._get_action_details(status_text)
+        
+        if btn_text:
+            action_btn.setText(btn_text)
+            action_btn.setStyleSheet(btn_style)
+            action_btn.clicked.connect(lambda: self._on_action_clicked(next_status))
+        else:
+            action_btn.setVisible(False)
+            
+        # Layout Assembly
+        layout.addWidget(order_lbl)
+        layout.addWidget(prod_lbl, 1) # Expand
+        layout.addWidget(date_lbl)
+        layout.addWidget(status_lbl)
+        layout.addWidget(action_btn)
+
+    def _on_action_clicked(self, next_status):
+        extra_data = {}
+        if next_status == "ENTREGADO":
+            # Usar QDialog estándar. El estilo global (styles-dark.qss) se encarga de colores.
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Confirmar Entrega")
+            dialog.setFixedWidth(300)
+            
+            # Forzar estilo oscuro en este diálogo específico para asegurar legibilidad
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #0b1220;
+                    color: #ffffff;
+                }
+                QLabel {
+                    background-color: transparent;
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QComboBox {
+                    background-color: #1f2937;
+                    color: #ffffff;
+                    border: 1px solid #374151;
+                    padding: 5px;
+                    border-radius: 4px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #1f2937;
+                    color: #ffffff;
+                    selection-background-color: #374151;
+                }
+            """)
+            
+            # Layout vertical simple
+            layout = QVBoxLayout(dialog)
+            
+            # Etiqueta
+            lbl = QLabel("Seleccione el método de entrega:")
+            layout.addWidget(lbl)
+            
+            # Combo
+            combo = QComboBox()
+            combo.addItems(["---- Seleccione ----", "OFICINA", "DELIVERY"])
+            layout.addWidget(combo)
+            
+            # Espaciador
+            layout.addSpacing(10)
+            
+            # Botones estándar
+            # Usamos QDialogButtonBox pero no nativo para aplicar nuestros estilos de QPushButton si es necesario,
+            # aunque el estilo global aplica a QPushButton dentro de QDialogButtonBox.
+            btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            btns.accepted.connect(dialog.accept)
+            btns.rejected.connect(dialog.reject)
+            
+            # Asegurar estilo de botones dentro del box
+            for button in btns.buttons():
+                if btns.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole:
+                    button.setStyleSheet("background-color: #FF6900; color: white; border: none; padding: 6px 12px; border-radius: 4px;")
+                else:
+                    button.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 6px 12px; border-radius: 4px;")
+
+            layout.addWidget(btns)
+            
+            if dialog.exec():
+                selected = combo.currentText()
+                if "Seleccione" not in selected:
+                    if selected == "DELIVERY":
+                        # Signal with special key to trigger full Delivery Dialog
+                        self.status_change_requested.emit(self.order_id, next_status, {'open_delivery_dialog': True})
+                    else:
+                        # Standard Office delivery
+                        extra_data['delivery_method'] = selected
+                        self.status_change_requested.emit(self.order_id, next_status, extra_data)
+        else:
+            self.status_change_requested.emit(self.order_id, next_status, {})
+
+    def _get_action_details(self, status):
+        # Returns: (Button Text, Next Status, Button Style)
+        base_style = """
+            QPushButton {
+                color: white;
+                border: none;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+        """
+        
+        if status == "NUEVO":
+            return "Aceptar", "DISEÑO", base_style + "QPushButton { background-color: #3498db; } QPushButton:hover { background-color: #2980b9; }"
+        elif status == "DISEÑO":
+            return "Terminar", "PRODUCCION", base_style + "QPushButton { background-color: #2ecc71; } QPushButton:hover { background-color: #27ae60; }"
+        elif status == "PRODUCCION" or status == "POR_PRODUCIR":
+            return "Aceptar", "EN_PRODUCCION", base_style + "QPushButton { background-color: #9b59b6; } QPushButton:hover { background-color: #8e44ad; }"
+        elif status == "EN_PRODUCCION":
+            return "Terminar", "LISTO", base_style + "QPushButton { background-color: #2ecc71; } QPushButton:hover { background-color: #27ae60; }"
+        elif status == "LISTO":
+            return "Entregar", "ENTREGADO", base_style + "QPushButton { background-color: #e67e22; } QPushButton:hover { background-color: #d35400; }"
+            
+        return None, None, None
+
+
+class AssignedOrdersWidget(QFrame):
+    status_change_requested = Signal(int, str, dict) # Added params for extra data
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet("""
+            QFrame#AssignedOrdersContainer {
+                background-color: white;
+                border-radius: 15px;
+            }
+        """)
+        self.setObjectName("AssignedOrdersContainer")
+        
+        # Shadow
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 20))
+        shadow.setYOffset(4)
+        self.setGraphicsEffect(shadow)
+
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(15)
+        
+        # Header
+        header_layout = QHBoxLayout()
+        icon_label = QLabel("📋")
+        icon_label.setFont(QFont("Segoe UI Emoji", 16))
+        icon_label.setStyleSheet("border: none; background: transparent;")
+        
+        title = QLabel("Mis Pedidos Pendientes")
+        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #2c3e50; border: none; background: transparent;")
+        
+        count_badge = QLabel("0")
+        count_badge.setObjectName("CountBadge")
+        count_badge.setStyleSheet("""
+            QLabel#CountBadge {
+                background-color: #e74c3c;
+                color: white;
+                border-radius: 10px;
+                padding: 2px 8px;
+                font-weight: bold;
+            }
+        """)
+        self.count_badge = count_badge
+        
+        header_layout.addWidget(icon_label)
+        header_layout.addWidget(title)
+        header_layout.addWidget(count_badge)
+        header_layout.addStretch()
+        
+        self.layout.addLayout(header_layout)
+        
+        # --- Column Headers ---
+        col_header_layout = QHBoxLayout()
+        col_header_layout.setContentsMargins(10, 0, 30, 5) # Adjust margins to match list items
+        col_header_layout.setSpacing(15)
+        
+        lbl_order = QLabel("NRO. ORDEN")
+        lbl_order.setStyleSheet("color: #95a5a6; font-weight: bold; font-size: 11px;")
+        lbl_order.setFixedWidth(120)
+        
+        lbl_prod = QLabel("PRODUCTO")
+        lbl_prod.setStyleSheet("color: #95a5a6; font-weight: bold; font-size: 11px;")
+        
+        lbl_date = QLabel("FECHA")
+        lbl_date.setStyleSheet("color: #95a5a6; font-weight: bold; font-size: 11px;")
+        lbl_date.setFixedWidth(80)
+        lbl_date.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        lbl_status = QLabel("ESTADO")
+        lbl_status.setFixedSize(100, 20)
+        lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_status.setStyleSheet("color: #95a5a6; font-weight: bold; font-size: 11px;")
+        
+        lbl_action = QLabel("ACCIÓN")
+        lbl_action.setFixedSize(100, 20)
+        lbl_action.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_action.setStyleSheet("color: #95a5a6; font-weight: bold; font-size: 11px;")
+        
+        col_header_layout.addWidget(lbl_order)
+        col_header_layout.addWidget(lbl_prod, 1)
+        col_header_layout.addWidget(lbl_date)
+        col_header_layout.addWidget(lbl_status)
+        col_header_layout.addWidget(lbl_action)
+        
+        self.layout.addLayout(col_header_layout)
+        # ----------------------
+        
+        # Vertical Scroll Area for List
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("background: transparent; border: none;")
+        
+        self.list_widget = QWidget()
+        self.list_widget.setStyleSheet("background: transparent;")
+        self.list_layout = QVBoxLayout(self.list_widget)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(0)
+        self.list_layout.addStretch()
+        
+        self.scroll.setWidget(self.list_widget)
+        self.scroll.setFixedHeight(180) # Fixed height for list
+        
+        self.layout.addWidget(self.scroll)
+
+    def update_orders(self, orders):
+        # Clear existing (except stretch)
+        while self.list_layout.count() > 1:
+            item = self.list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        count = len(orders)
+        self.count_badge.setText(str(count))
+        self.count_badge.setVisible(count > 0)
+        
+        if not orders:
+            # Show empty state
+            empty_lbl = QLabel("¡Todo al día! No tienes pedidos pendientes.")
+            empty_lbl.setStyleSheet("color: #95a5a6; font-size: 14px; font-style: italic; border: none; background: transparent; padding: 20px;")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.list_layout.insertWidget(0, empty_lbl)
+            return
+
+        for order in orders:
+            item = OrderListItem(order)
+            # Propagate signal (int, str, dict)
+            item.status_change_requested.connect(self.status_change_requested.emit)
+            self.list_layout.insertWidget(self.list_layout.count()-1, item)
+
+
 class HomeView(QWidget):
     navigate_requested = Signal(str)
 
@@ -354,8 +629,8 @@ class HomeView(QWidget):
         
         greet_lbl = QLabel(f"Hola, {self._current_user} 👋")
         greet_lbl.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-        greet_lbl.setStyleSheet("color: #2c3e50;")
-        
+        greet_lbl.setStyleSheet("color: #FF6900;")
+
         date_lbl = QLabel(datetime.now().strftime("%A, %d de %B de %Y").capitalize())
         date_lbl.setFont(QFont("Segoe UI", 11))
         date_lbl.setStyleSheet("color: #7f8c8d;")
@@ -428,6 +703,13 @@ class HomeView(QWidget):
             kpi_layout.addWidget(card)
             
         main_layout.addLayout(kpi_layout)
+
+        # 0. Assigned Orders (Hidden by default, shown for Designers)
+        # Placed here to span full width below KPIs
+        self.assigned_orders_widget = AssignedOrdersWidget()
+        self.assigned_orders_widget.setVisible(False)
+        self.assigned_orders_widget.status_change_requested.connect(self.handle_order_status_change)
+        main_layout.addWidget(self.assigned_orders_widget)
         
         # --- Main Content (Chart | Quick Actions + Team) ---
         content_layout = QHBoxLayout()
@@ -467,16 +749,11 @@ class HomeView(QWidget):
         
         chart_layout.addWidget(self.chart_view)
         
-        # Right Column (Quick Actions + Team)
+        # Right Column (Team)
         right_column = QWidget()
         right_layout = QVBoxLayout(right_column)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(20)
-        
-        # 1. Quick Actions Section
-        quick_actions = QuickActionsWidget()
-        quick_actions.action_requested.connect(self.navigate_requested.emit)
-        right_layout.addWidget(quick_actions)
         
         # 2. Team Section
         team_container = QFrame()
@@ -536,6 +813,97 @@ class HomeView(QWidget):
         main_layout.addLayout(content_layout)
         main_layout.addStretch()
 
+    def handle_order_status_change(self, order_id: int, new_status: str, extra_data: dict = None):
+        """Manejar cambio de estado de pedido desde el widget de asignados."""
+        try:
+            # CASO ESPECIAL: Asignar Delivery desde Home
+            if extra_data and extra_data.get('open_delivery_dialog'):
+                dlg = CreateDeliveryDialog(self._session_factory, self)
+                # Pre-seleccionar la orden actual
+                idx = dlg.cb_orders.findData(order_id)
+                if idx >= 0:
+                    dlg.cb_orders.setCurrentIndex(idx)
+                    dlg.cb_orders.setEnabled(False) # Bloquear cambio de orden
+                
+                if dlg.exec():
+                    data = dlg.get_data()
+                    
+                    # Fix QDate to datetime
+                    from datetime import datetime, time
+                    sent_date = data['date']
+                    if hasattr(sent_date, 'toPython'): # In case it is strictly QDate
+                        sent_date = sent_date.toPython()
+                    # Combine with a default time if it's just a date object
+                    if not isinstance(sent_date, datetime):
+                         sent_dt = datetime.combine(sent_date, time(9,0))
+                    else:
+                         sent_dt = sent_date
+
+                    # Crear Registro de Delivery Y Actualizar Orden
+                    with self._session_factory() as session:
+                        try:
+                            # 1. Crear Delivery
+                            new_delivery = Delivery(
+                                order_id=data['order_id'],
+                                zone_id=data['zone_id'],
+                                delivery_user_id=data['user_id'],
+                                sent_at=sent_dt,
+                                notes=data['notes'],
+                                status="PENDIENTE", # Estado inicial del envío
+                                amount_bs=data.get('amount_bs', 0.0),
+                                payment_source=data.get('payment_source', 'EMPRESA')
+                            )
+                            session.add(new_delivery)
+                            
+                            # 2. Actualizar Orden a ENTREGADO (Método: DELIVERY)
+                            from datetime import datetime
+                            update_fields = {
+                                "status": "ENTREGADO",
+                                "delivered_at": datetime.now(),
+                                "delivery_method": "DELIVERY"
+                            }
+                            
+                            # Usamos la función del repositorio, pero como ya estamos en una sesión,
+                            # llamamos update directamente o usamos una lógica local.
+                            # update_order hace commit interno si se le pasa session? 
+                            # update_order en repository.py: 'with session_factory() as session' si se pasa factory, 
+                            # o usa 'session' si se pasa session.
+                            # Verifiquemos update_order antes de asumir.
+                            # Por seguridad, hacemos el update manual aquí para garantizar atomicidad de transacción.
+                            from ..models import Order
+                            order = session.query(Order).get(order_id)
+                            if order:
+                                for key, value in update_fields.items():
+                                    setattr(order, key, value)
+                            
+                            session.commit()
+                            QMessageBox.information(self, "Éxito", "Delivery asignado y orden marcada como ENTREGADA.")
+                            self.refresh_data()
+                        except Exception as e:
+                            session.rollback()
+                            QMessageBox.critical(self, "Error", f"Error realizando la operación: {e}")
+                return
+
+            # Flujo Normal
+            with self._session_factory() as session:
+                update_fields = {"status": new_status}
+                
+                # If delivered, save timestamp and method
+                if new_status == "ENTREGADO":
+                    from datetime import datetime
+                    update_fields["delivered_at"] = datetime.now()
+                    if extra_data and "delivery_method" in extra_data:
+                        update_fields["delivery_method"] = extra_data["delivery_method"]
+
+                if update_order(session, order_id, **update_fields):
+                    QMessageBox.information(self, "Éxito", f"Pedido actualizado a: {new_status}")
+                    self.refresh_data()
+                else:
+                    QMessageBox.warning(self, "Error", "No se pudo actualizar el pedido.")
+        except Exception as e:
+            print(f"Error actualizando estado de pedido: {e}")
+            QMessageBox.critical(self, "Error", f"Error actualizando estado: {e}")
+
     def refresh_data(self):
         """Actualizar todos los datos del dashboard."""
         try:
@@ -560,6 +928,29 @@ class HomeView(QWidget):
                 
                 # Actualizar lista de vendedores (Mostrar TODOS para motivar, sin filtro)
                 self.update_sales_team_list(session, current_goal, filter_user=None)
+
+                # Check for Pending Orders (Designer, Production, Seller)
+                from ..models import User
+                user = session.query(User).filter(User.username == self._current_user).first()
+                if user:
+                    orders = get_pending_orders_for_user(session, user.id)
+                    
+                    # Determine visibility: Show if orders exist OR if user has specific roles
+                    should_show = False
+                    if orders:
+                        should_show = True
+                    else:
+                        # Check if user is Designer, Production or Seller to show empty state
+                        if (user_has_role(session, user_id=user.id, role_name="DISEÑADOR") or 
+                            user_has_role(session, user_id=user.id, role_name="PRODUCCION") or
+                            user_has_role(session, user_id=user.id, role_name="VENDEDOR") or
+                            user_has_role(session, user_id=user.id, role_name="ADMIN") or
+                            user.username == "admin"):
+                            should_show = True
+                    
+                    self.assigned_orders_widget.setVisible(should_show)
+                    if should_show:
+                        self.assigned_orders_widget.update_orders(orders)
                 
         except Exception as e:
             print(f"Error actualizando datos del dashboard: {e}")

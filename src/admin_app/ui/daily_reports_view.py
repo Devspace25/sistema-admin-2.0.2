@@ -157,9 +157,9 @@ class DailyReportsView(QWidget):
         reports_layout = QVBoxLayout(reports_group)
 
         self.reports_table = QTableWidget()
-        self.reports_table.setColumnCount(9)
+        self.reports_table.setColumnCount(10)
         self.reports_table.setHorizontalHeaderLabels([
-            "Fecha", "Estado", "Ventas", "Total USD", "Total Bs", "Abono USD", "Restante", "Ingresos USD", "Ver Detalles"
+            "Fecha", "Estado", "Ventas", "Total USD", "Total Bs", "Abono USD", "Restante", "Ingresos USD", "Ver Detalles", "Eliminar"
         ])
 
         # Configurar tabla
@@ -173,6 +173,7 @@ class DailyReportsView(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)  # Restante
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)  # Ingresos USD
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # Ver Detalles
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # Eliminar
 
         self.reports_table.setAlternatingRowColors(True)
         self.reports_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -309,6 +310,21 @@ class DailyReportsView(QWidget):
                     )
                     self.reports_table.setCellWidget(row, 8, btn_details)
 
+                    # Botón Eliminar (Solo Admin)
+                    if self._can_view_all_sales:
+                        btn_delete = QPushButton("🗑️")
+                        btn_delete.setToolTip("Eliminar Reporte")
+                        btn_delete.setStyleSheet("QPushButton { background-color: #ef4444; color: white; border: none; border-radius: 3px; font-weight: bold; } QPushButton:hover { background-color: #dc2626; }")
+                        btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+                        btn_delete.clicked.connect(
+                            lambda checked, r=report: self._delete_report(r)
+                        )
+                        self.reports_table.setCellWidget(row, 9, btn_delete)
+                    else:
+                        item = QTableWidgetItem("-")
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.reports_table.setItem(row, 9, item)
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al cargar reportes: {str(e)}")
 
@@ -393,6 +409,32 @@ class DailyReportsView(QWidget):
             QMessageBox.warning(self, "Advertencia", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al generar reporte: {str(e)}")
+
+    def _delete_report(self, report):
+        """Eliminar un reporte diario."""
+        reply = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Estás seguro de eliminar el reporte del {report.report_date.strftime('%d/%m/%Y')}?\n"
+            "Esta acción no se puede deshacer.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                with self._session_factory() as session:
+                    # Traer el objeto a la sesión actual
+                    from ..models import DailyReport
+                    report_to_delete = session.get(DailyReport, report.id)
+                    if report_to_delete:
+                        session.delete(report_to_delete)
+                        session.commit()
+                        QMessageBox.information(self, "Éxito", "Reporte eliminado correctamente.")
+                        self._load_data()
+                    else:
+                        QMessageBox.warning(self, "Error", "El reporte ya no existe.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Error al eliminar reporte: {str(e)}")
 
     def _check_can_view_all_sales(self) -> bool:
         """Verifica si el usuario actual puede ver todas las ventas o solo las suyas."""

@@ -23,6 +23,7 @@ from ..repository import (
     add_corporeo_config,
     user_has_role
 )
+from ..permissions import is_admin_user
 from .sale_dialog import SaleDialog as InvoiceSaleDialog
 
 
@@ -31,8 +32,9 @@ class SalesView(QWidget):
         super().__init__(parent)
         self._session_factory = session_factory
         self._current_user = None
-        self._can_edit = True
-        self._can_delete = True
+        self._can_edit = False
+        self._can_delete = False
+        self._can_create = False
         self._setup_ui()
         self._load_sales()
         
@@ -41,12 +43,15 @@ class SalesView(QWidget):
 
     def set_permissions(self, permissions: set[str]):
         """Configurar permisos de edición y eliminación."""
-        self._can_edit = "edit_sales" in permissions
+        is_admin = is_admin_user(self._session_factory, self._current_user)
+
         self._can_create = "create_sales" in permissions
-        # Asumimos que eliminar requiere permiso de edición o uno específico si existiera
-        self._can_delete = "edit_sales" in permissions 
+        self._can_edit = is_admin and ("edit_sales" in permissions)
+        self._can_delete = is_admin and ("edit_sales" in permissions)
         
         self.btn_add.setVisible(self._can_create)
+        self.btn_edit.setVisible(self._can_edit)
+        self.btn_delete.setVisible(self._can_delete)
         self._on_selection_changed()
         
     def refresh(self):
@@ -81,16 +86,19 @@ class SalesView(QWidget):
         # Botones de acción
         self.btn_add = QPushButton("➕ Nueva Venta")
         self.btn_add.clicked.connect(self._on_add_sale)
+        self.btn_add.setVisible(False)
         top_bar.addWidget(self.btn_add)
 
         self.btn_edit = QPushButton("✏️ Editar")
         self.btn_edit.clicked.connect(self._on_edit_sale)
         self.btn_edit.setEnabled(False)
+        self.btn_edit.setVisible(False)
         top_bar.addWidget(self.btn_edit)
 
         self.btn_delete = QPushButton("🗑️ Eliminar")
         self.btn_delete.clicked.connect(self._on_delete_sale)
         self.btn_delete.setEnabled(False)
+        self.btn_delete.setVisible(False)
         top_bar.addWidget(self.btn_delete)
 
         self.btn_refresh = QPushButton("🔄 Actualizar")
@@ -124,10 +132,31 @@ class SalesView(QWidget):
         self._setup_table()
         layout.addWidget(self.table)
         
-        # Estado (Bottom)
+        # Bottom Bar (Status + Legend)
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Status
         self._status_label = QLabel("Listo", self)
-        self._status_label.setStyleSheet("color: #666; font-style: italic; padding: 4px;")
-        layout.addWidget(self._status_label)
+        self._status_label.setStyleSheet("color: #999; font-style: italic; padding: 4px;")
+        bottom_layout.addWidget(self._status_label)
+        
+        bottom_layout.addStretch()
+        
+        # Legend (Leyenda de colores)
+        lbl_legend = QLabel("Leyenda (N° Orden):", self)
+        lbl_legend.setStyleSheet("color: #ccc; font-weight: bold; margin-right: 8px;")
+        bottom_layout.addWidget(lbl_legend)
+
+        lbl_por_cobrar = QLabel("■ Por Cobrar", self)
+        lbl_por_cobrar.setStyleSheet("color: orange; font-weight: bold; margin-right: 12px;")
+        bottom_layout.addWidget(lbl_por_cobrar)
+
+        lbl_pagado = QLabel("■ Pagado", self)
+        lbl_pagado.setStyleSheet("color: #2ecc71; font-weight: bold;") # Green nice shade
+        bottom_layout.addWidget(lbl_pagado)
+        
+        layout.addLayout(bottom_layout)
         
     def _setup_table(self):
         # Configurar columnas de la tabla
@@ -583,6 +612,7 @@ class SalesView(QWidget):
                         
                         items_data.append({
                             'product_name': item.product_name,
+                            'description': details.get('description', ''), # Mapear descripción del item desde details
                             'quantity': item.quantity,
                             'unit_price': item.unit_price,
                             'total_price': item.total_price,

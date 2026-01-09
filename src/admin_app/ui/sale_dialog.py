@@ -107,6 +107,89 @@ class SaleDialog(QDialog):
         self._load_bcv_rate()
         self._update_totals()
 
+    def accept(self) -> None:
+        """Validar antes de guardar."""
+        # 1. Validar Cliente
+        client_val = ""
+        if hasattr(self, 'edt_cliente'):
+            # edt_cliente is a QComboBox, use currentText()
+            client_val = self.edt_cliente.currentText().strip()
+        
+        if not client_val or client_val.startswith("----"):
+            QMessageBox.warning(self, "Validación", "El campo Cliente es requerido para procesar la venta.")
+            if hasattr(self, 'edt_cliente'): self.edt_cliente.setFocus()
+            return
+
+        # 2. Validar Productos
+        has_products = False
+        if hasattr(self, 'tbl_product_lines') and self.tbl_product_lines.rowCount() > 0:
+            has_products = True
+        elif hasattr(self, 'tbl_items') and self.tbl_items.rowCount() > 0:
+            has_products = True
+            
+        if not has_products:
+            QMessageBox.warning(self, "Validación", "Debe agregar al menos un producto a la venta.")
+            return
+
+        # 3. Validar Pagos
+        if hasattr(self, 'tbl_payments'):
+            if self.tbl_payments.rowCount() == 0:
+                QMessageBox.warning(self, "Validación", "Debe agregar al menos un método de pago.")
+                return
+
+            for r in range(self.tbl_payments.rowCount()):
+                cmb_method = self.tbl_payments.cellWidget(r, 0)
+                if not cmb_method: continue
+                
+                method = cmb_method.currentText()
+                if not method or method.startswith('----'):
+                    continue # Ignore empty lines or force selection? Usually ignore or warn.
+                             # If lines exist but nothing selected, maybe warn?
+                             # Let's assume ignore empty selection rows usually.
+                
+                # Retrieve Widgets
+                w_bank = self.tbl_payments.cellWidget(r, 3) 
+                w_ref = self.tbl_payments.cellWidget(r, 4)
+                
+                # A. Efectivo USD -> Serial Requerido
+                if method == "Efectivo USD":
+                    serial = ""
+                    if isinstance(w_bank, QLineEdit): serial = w_bank.text().strip()
+                    elif isinstance(w_bank, QComboBox): serial = w_bank.currentText().strip()
+                    
+                    if not serial:
+                        QMessageBox.warning(self, "Validación", "El Serial del billete es requerido para pagos en Efectivo USD.")
+                        w_bank.setFocus()
+                        return
+
+                # B. Pago Móvil / Transferencia -> Banco y Referencia Requeridos
+                # Assuming this applies to the methods we converted to ComboBox logic
+                is_bank_method = method in ["Pago móvil", "Transferencia Bs.D", "Zelle", "Banesco Panamá", "Punto de Venta"]
+                
+                if is_bank_method:
+                    # Validate Bank Selection
+                    bank_val = ""
+                    if isinstance(w_bank, QComboBox):
+                        bank_val = w_bank.currentText()
+                        if bank_val.startswith("----"): bank_val = ""
+                    elif isinstance(w_bank, QLineEdit):
+                        bank_val = w_bank.text().strip()
+                        
+                    if not bank_val:
+                        QMessageBox.warning(self, "Validación", f"Debe seleccionar un Banco para el método '{method}'.")
+                        if isinstance(w_bank, QComboBox): w_bank.showPopup()
+                        w_bank.setFocus()
+                        return
+
+                    # Validate Reference Length
+                    ref_val = w_ref.text().strip() if w_ref else ""
+                    if len(ref_val) < 4:
+                        QMessageBox.warning(self, "Validación", f"La Referencia para '{method}' debe tener al menos 4 dígitos.")
+                        if w_ref: w_ref.setFocus()
+                        return
+
+        super().accept()
+
     # --- Construcción de UI ---
     def _create_invoice_header(self, layout: QVBoxLayout) -> None:
         from datetime import datetime
@@ -245,10 +328,7 @@ class SaleDialog(QDialog):
         # === 2. Líneas de Productos ===
         self._create_product_lines_section(main_col)
 
-        # === 3. Métodos de Pago ===
-        self._create_payment_methods_section(main_col)
-
-        # === 4. Extras ===
+        # === 3. Extras (MOVIDO AQUÍ) ===
         self.grp_extras = QGroupBox("Extras", self)
         grid_extras = QGridLayout()
         
@@ -257,9 +337,6 @@ class SaleDialog(QDialog):
         self.chk_incluye_diseno = QCheckBox("Incluir", self)
         grid_extras.addWidget(self.chk_incluye_diseno, 0, 1)
         grid_extras.addWidget(QLabel("Precio $:", self), 0, 2)
-        # self.edt_diseno ya creado en _create_widgets, pero necesitamos que sea MoneySpinBox
-        # Como ya se creó como QDoubleSpinBox, lo reemplazamos aquí o cambiamos _create_widgets.
-        # Mejor cambiamos _create_widgets para usar MoneySpinBox.
         grid_extras.addWidget(self.edt_diseno, 0, 3)
         
         # Row 1: Instalación (New)
@@ -267,8 +344,7 @@ class SaleDialog(QDialog):
         self.chk_incluye_inst = QCheckBox("Incluir", self)
         grid_extras.addWidget(self.chk_incluye_inst, 1, 1)
         grid_extras.addWidget(QLabel("Precio $:", self), 1, 2)
-        # self.edt_inst no estaba en _create_widgets originalmente, se creó aquí.
-        # Lo cambiamos a MoneySpinBox
+        # self.edt_inst creation
         self.edt_inst = MoneySpinBox(self)
         self._conf_money(self.edt_inst, prefix="", maxv=999999.99)
         self.edt_inst.setEnabled(False)
@@ -276,12 +352,14 @@ class SaleDialog(QDialog):
         
         # Row 2: Descripción
         grid_extras.addWidget(QLabel("Descripción:", self), 2, 0)
-        # self.edt_descripcion ya creado en _create_widgets
         self.edt_descripcion.setPlaceholderText("Descripción adicional...")
         grid_extras.addWidget(self.edt_descripcion, 2, 1, 1, 3)
         
         self.grp_extras.setLayout(grid_extras)
         main_col.addWidget(self.grp_extras)
+
+        # === 4. Métodos de Pago ===
+        self._create_payment_methods_section(main_col)
 
         # === 5. Resumen (Totales) ===
         self.grp_resumen = QGroupBox("Resumen", self)
@@ -989,6 +1067,56 @@ class SaleDialog(QDialog):
                 break
         if row == -1:
             return
+
+        # -----------------------------------------------------------
+        # NEW LOGIC: Switch Banco/Serial widget type depending on Method
+        # -----------------------------------------------------------
+        method = cmb.currentText().lower()
+        w_bank_current = self.tbl_payments.cellWidget(row, 3)
+        current_text = ""
+        if isinstance(w_bank_current, QLineEdit):
+            current_text = w_bank_current.text()
+        elif isinstance(w_bank_current, QComboBox):
+             current_text = w_bank_current.currentText()
+
+        # Keywords that imply a BANK selection
+        bs_bank_methods = ["pago móvil", "transferencia", "punto", "biopago", "deposito", "zelle", "panama", "mony"]
+        
+        should_be_combo = any(m in method for m in bs_bank_methods)
+        
+        if should_be_combo:
+            if not isinstance(w_bank_current, QComboBox):
+                # Replace with ComboBox
+                new_cmb = QComboBox(self)
+                new_cmb.setEditable(True) 
+                
+                # Define banks based on likely currency
+                banks = []
+                if "zelle" in method or "panama" in method or "mony" in method:
+                     banks = ["Zelle", "Banesco Panamá", "Mercantil Panamá", "Facebank", "PayPal", "Binance"]
+                else:
+                     # VES Banks (Company specific first)
+                     banks = ["Banesco", "Banco de Venezuela", "Bancamiga", "Mercantil", "Provincial", "BNC", "Tesoro", "Bicentenario"]
+
+                new_cmb.addItems(["---- Seleccione ----"] + banks)
+                
+                # Try to restore text if matches
+                if current_text:
+                    idx = new_cmb.findText(current_text)
+                    if idx >= 0:
+                        new_cmb.setCurrentIndex(idx)
+                    else:
+                        new_cmb.setEditText(current_text)
+                    
+                self.tbl_payments.setCellWidget(row, 3, new_cmb)
+        else:
+            if not isinstance(w_bank_current, QLineEdit):
+                # Replace with LineEdit (for Efectivo / Notes)
+                new_edt = QLineEdit(self)
+                new_edt.setPlaceholderText("Serial Billete / Nota...")
+                new_edt.setText(current_text)
+                self.tbl_payments.setCellWidget(row, 3, new_edt)
+        # -----------------------------------------------------------
             
         # Apply auto-fill logic (always, logic inside handles method type)
         self._apply_payment_autofill(row)
@@ -1718,7 +1846,7 @@ class SaleDialog(QDialog):
                         'total_price': total_usd,
                         'total_bs': w_total_bs.value() if w_total_bs else 0.0,
                         'details': payload or {},
-                        'descripcion': w_desc.text() if w_desc else ""
+                        'description': w_desc.text() if w_desc else ""  # Use 'description' key to match repository expectation
                     })
             
             # Fallback to legacy _items_data if new table is empty (just in case)
@@ -1739,12 +1867,20 @@ class SaleDialog(QDialog):
                     method = cmb_method.currentText()
                     if not method or method.startswith('----'): continue
                     
+                    # Extract Bank / Serial info safely from LineEdit or ComboBox
+                    bank_info = ""
+                    if isinstance(w_bank, QLineEdit):
+                        bank_info = w_bank.text()
+                    elif isinstance(w_bank, QComboBox):
+                        bank_info = w_bank.currentText()
+
                     payments.append({
                         'payment_method': method,
                         'amount_bs': w_bs.value() if w_bs else 0.0,
                         'amount_usd': w_usd.value() if w_usd else 0.0,
-                        'bank': w_bank.text() if w_bank else "",
+                        'bank': bank_info,
                         'reference': w_ref.text() if w_ref else "",
+                        'serial_billete': bank_info, # Legacy support
                         'exchange_rate': self.edt_tasa_bcv_payments.value() if hasattr(self, 'edt_tasa_bcv_payments') else 0.0
                     })
 
@@ -1791,9 +1927,9 @@ class SaleDialog(QDialog):
                 "monto_usd": f"{total_abono_usd:.2f}", # Sum of all USD payments (legacy field name often used for abono)
                 "abono_usd": f"{total_abono_usd:.2f}", # Sum of all USD payments
                 "iva": f"{self.out_iva.value():.2f}",
-                "iva_aplicado": "1" if self.chk_iva.isChecked() else "0",
+                "iva_aplicado": self.chk_iva.isChecked(),
                 "diseno_usd": f"{self.edt_diseno.value():.2f}",
-                "incluye_diseno": "1" if self.chk_incluye_diseno.isChecked() else "0",
+                "incluye_diseno": self.chk_incluye_diseno.isChecked(),
                 "ingresos_usd": f"{self.edt_inst.value():.2f}" if hasattr(self, 'edt_inst') else "0.00", # Map INST to ingresos_usd
                 "descripcion": self.edt_descripcion.text(),
                 "subtotal_usd": f"{self.out_subtotal.value():.2f}",
@@ -2022,11 +2158,18 @@ class SaleDialog(QDialog):
                     if idx >= 0:
                         cmb_prod.setCurrentIndex(idx)
                     
-                    w_cant = self.tbl_product_lines.cellWidget(row, 1)
+                    # 1. Description
+                    w_desc = self.tbl_product_lines.cellWidget(row, 1)
+                    if w_desc:
+                        w_desc.setText(item.get('description') or item.get('descripcion') or '')
+
+                    # 2. Quantity
+                    w_cant = self.tbl_product_lines.cellWidget(row, 2)
                     try: w_cant.setValue(float(item.get('quantity', 1.0)))
                     except: pass
                     
-                    w_price_usd = self.tbl_product_lines.cellWidget(row, 2)
+                    # 3. Price USD
+                    w_price_usd = self.tbl_product_lines.cellWidget(row, 3)
                     try: w_price_usd.setValue(float(item.get('unit_price', 0.0)))
                     except: pass
                     
@@ -2045,11 +2188,18 @@ class SaleDialog(QDialog):
                     if idx >= 0:
                         cmb_prod.setCurrentIndex(idx)
                     
-                    w_cant = self.tbl_product_lines.cellWidget(row, 1)
+                    # 1. Description (Legacy fallback usually doesn't have description, but we can try)
+                    w_desc = self.tbl_product_lines.cellWidget(row, 1)
+                    if w_desc:
+                        w_desc.setText(data.get('descripcion') or '')
+
+                    # 2. Quantity
+                    w_cant = self.tbl_product_lines.cellWidget(row, 2)
                     try: w_cant.setValue(float(data.get("cantidad", 1.0)))
                     except: pass
                     
-                    w_price_usd = self.tbl_product_lines.cellWidget(row, 2)
+                    # 3. Price USD
+                    w_price_usd = self.tbl_product_lines.cellWidget(row, 3)
                     try: w_price_usd.setValue(float(data.get("precio_unitario", 0.0)))
                     except: pass
                     

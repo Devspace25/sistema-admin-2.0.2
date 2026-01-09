@@ -429,8 +429,8 @@ class PendingPaymentsView(QWidget):
         layout.addLayout(toolbar)
         
         # Table
-        # Columns: ID, Fecha Venta, Núm. Orden, Cliente, Artículo, Total $, Abonado $, Restante $, Días Pendiente
-        cols = ["ID", "Fecha Venta", "Núm. Orden", "Cliente", "Artículo", "Total $", "Abonado $", "Restante $", "Días Pendiente"]
+        # Columns: ID, Fecha Venta, Núm. Orden, Cliente, Asesor, Artículo, Total $, Abonado $, Restante $, Días Pendiente
+        cols = ["ID", "Fecha Venta", "Núm. Orden", "Cliente", "Asesor", "Artículo", "Total $", "Abonado $", "Restante $", "Días Pendiente"]
         self.table_pending = QTableWidget(0, len(cols))
         self.table_pending.setHorizontalHeaderLabels(cols)
         self._style_table(self.table_pending)
@@ -509,21 +509,22 @@ class PendingPaymentsView(QWidget):
                     
                     days_pending = (now - sale.fecha).days
                     
-                    # Columns: ID, Fecha Venta, Núm. Orden, Cliente, Artículo, Total $, Abonado $, Restante $, Días Pendiente
+                    # Columns: ID, Fecha Venta, Núm. Orden, Cliente, Asesor, Artículo, Total $, Abonado $, Restante $, Días Pendiente
                     self.table_pending.setItem(i, 0, QTableWidgetItem(str(sale.id)))
                     self.table_pending.setItem(i, 1, QTableWidgetItem(sale.fecha.strftime("%d/%m/%Y")))
                     self.table_pending.setItem(i, 2, QTableWidgetItem(sale.numero_orden))
                     self.table_pending.setItem(i, 3, QTableWidgetItem(sale.cliente or "N/A"))
-                    self.table_pending.setItem(i, 4, QTableWidgetItem(sale.articulo or ""))
-                    self.table_pending.setItem(i, 5, QTableWidgetItem(f"${sale.venta_usd:.2f}"))
-                    self.table_pending.setItem(i, 6, QTableWidgetItem(f"${(sale.abono_usd or 0.0):.2f}"))
+                    self.table_pending.setItem(i, 4, QTableWidgetItem(sale.asesor or "N/A"))
+                    self.table_pending.setItem(i, 5, QTableWidgetItem(sale.articulo or ""))
+                    self.table_pending.setItem(i, 6, QTableWidgetItem(f"${sale.venta_usd:.2f}"))
+                    self.table_pending.setItem(i, 7, QTableWidgetItem(f"${(sale.abono_usd or 0.0):.2f}"))
                     
                     item_rest = QTableWidgetItem(f"${sale.restante:.2f}")
                     item_rest.setForeground(QColor("#e74c3c")) # Red
                     item_rest.setFont(QFont("", -1, QFont.Weight.Bold))
-                    self.table_pending.setItem(i, 7, item_rest)
+                    self.table_pending.setItem(i, 8, item_rest)
                     
-                    self.table_pending.setItem(i, 8, QTableWidgetItem(str(days_pending)))
+                    self.table_pending.setItem(i, 9, QTableWidgetItem(str(days_pending)))
                 
                 self.lbl_status_pending.setText(f"{len(sales)} ventas pendientes")
                 self._filter_table(self.table_pending, self.search_pending)
