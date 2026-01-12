@@ -1,8 +1,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Text
-from sqlalchemy.dialects.sqlite import JSON as SqliteJSON
+from sqlalchemy import Text, JSON
 
 from datetime import datetime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -22,7 +21,7 @@ class CorporeoForm(Base):
     product_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("products.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    payload_json: Mapped[dict] = mapped_column(SqliteJSON, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -123,7 +122,26 @@ class Worker(Base):
     address: Mapped[str | None] = mapped_column(Text, name="direccion")
     job_title: Mapped[str | None] = mapped_column(String(100), name="rol") # 'rol' in DB
     start_date: Mapped[datetime | None] = mapped_column(DateTime, name="fecha_ingreso")
-    salary: Mapped[float | None] = mapped_column(Float, name="salario")
+    salary: Mapped[float | None] = mapped_column(Float, name="salario") # Sueldo Base en USD
+    
+    # Comisiones y Bonos
+    commission_pct: Mapped[float] = mapped_column(Float, default=0.0) # Porcentaje de Comisión (0-100)
+    bonus_attendance: Mapped[float] = mapped_column(Float, default=0.0) # Bono Asistencia (USD)
+    bonus_food: Mapped[float] = mapped_column(Float, default=0.0) # Bono Alimentación (USD)
+    bonus_role: Mapped[float] = mapped_column(Float, default=0.0) # Bono por Cargo (USD)
+    
+    # Banking Info
+    bank_account: Mapped[str | None] = mapped_column(String(50))
+    pago_movil_cedula: Mapped[str | None] = mapped_column(String(20))
+    pago_movil_phone: Mapped[str | None] = mapped_column(String(20))
+    pago_movil_bank: Mapped[str | None] = mapped_column(String(100))
+    
+    # Crypto / Other
+    binance_email: Mapped[str | None] = mapped_column(String(200))
+    zelle_email: Mapped[str | None] = mapped_column(String(200))
+    
+    # Frequency
+    payment_frequency: Mapped[str] = mapped_column(String(20), default="QUINCENAL") # QUINCENAL | SEMANAL
     
     # Legacy required columns
     first_name: Mapped[str | None] = mapped_column(String(100))
@@ -261,6 +279,7 @@ class Sale(Base):
     precio_unitario: Mapped[float | None] = mapped_column(Float)  # Precio unitario (USD)
     total_bs: Mapped[float | None] = mapped_column(Float)  # Total en Bs
     details_json: Mapped[str | None] = mapped_column(String(4000))  # JSON con detalles de la venta (serializado)
+    commission_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     items: Mapped[List["SaleItem"]] = relationship("SaleItem", back_populates="sale", cascade="all, delete-orphan")
@@ -704,7 +723,7 @@ class Delivery(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    order_id: Mapped[int] = mapped_column(Integer, ForeignKey("orders.id"), nullable=False)
+    order_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("orders.id"), nullable=True)
     zone_id: Mapped[int] = mapped_column(Integer, ForeignKey("delivery_zones.id"), nullable=False)
     delivery_user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"))
     

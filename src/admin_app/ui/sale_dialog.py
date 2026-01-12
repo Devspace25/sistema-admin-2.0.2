@@ -14,7 +14,7 @@ import unicodedata
 from ..exchange import get_bcv_rate, get_rate_for_date
 from ..repository import list_customers, add_customers, list_configurable_products, eav_list_types, generate_order_number
 from ..db import make_engine, make_session_factory
-from ..models import Customer, User, Role, UserRole
+from ..models import Customer, User, Role, UserRole, Account
 from .customer_dialog import CustomerDialog
 from .login_dialog import LoginDialog
 import json
@@ -1092,11 +1092,19 @@ class SaleDialog(QDialog):
                 
                 # Define banks based on likely currency
                 banks = []
-                if "zelle" in method or "panama" in method or "mony" in method:
-                     banks = ["Zelle", "Banesco Panamá", "Mercantil Panamá", "Facebank", "PayPal", "Binance"]
-                else:
-                     # VES Banks (Company specific first)
-                     banks = ["Banesco", "Banco de Venezuela", "Bancamiga", "Mercantil", "Provincial", "BNC", "Tesoro", "Bicentenario"]
+                target_currency = "VES"
+                # Determine currency based on method name
+                if "zelle" in method or "panama" in method or "mony" in method or "paypal" in method or "binance" in method:
+                     target_currency = "USD"
+
+                if self._session_factory:
+                    with self._session_factory() as session:
+                        accs = session.query(Account).filter(
+                            Account.is_active == True,
+                            Account.currency == target_currency,
+                            Account.type.in_(['BANK', 'DIGITAL'])
+                        ).all()
+                        banks = [a.name for a in accs]
 
                 new_cmb.addItems(["---- Seleccione ----"] + banks)
                 

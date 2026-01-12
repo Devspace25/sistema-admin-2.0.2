@@ -3449,7 +3449,13 @@ def get_worker(session: Session, worker_id: int) -> Worker | None:
 def create_worker(session: Session, full_name: str, user_id: int | None = None, 
                   cedula: str | None = None, phone: str | None = None, email: str | None = None,
                   address: str | None = None, job_title: str | None = None, 
-                  start_date: datetime | None = None, salary: float | None = None) -> Worker:
+                  start_date: datetime | None = None, salary: float | None = None,
+                  payment_frequency: str = "QUINCENAL",
+                  commission_pct: float = 0.0, bonus_attendance: float = 0.0,
+                  bonus_food: float = 0.0, bonus_role: float = 0.0,
+                  bank_account: str | None = None, pago_movil_cedula: str | None = None,
+                  pago_movil_phone: str | None = None, pago_movil_bank: str | None = None,
+                  binance_email: str | None = None, zelle_email: str | None = None) -> Worker:
     
     # Split full_name into first and last name for legacy support
     parts = full_name.strip().split(' ', 1)
@@ -3467,7 +3473,18 @@ def create_worker(session: Session, full_name: str, user_id: int | None = None,
         address=address,
         job_title=job_title,
         start_date=start_date,
-        salary=salary
+        salary=salary,
+        payment_frequency=payment_frequency,
+        commission_pct=commission_pct,
+        bonus_attendance=bonus_attendance,
+        bonus_food=bonus_food,
+        bonus_role=bonus_role,
+        bank_account=bank_account,
+        pago_movil_cedula=pago_movil_cedula,
+        pago_movil_phone=pago_movil_phone,
+        pago_movil_bank=pago_movil_bank,
+        binance_email=binance_email,
+        zelle_email=zelle_email
     )
     session.add(worker)
     session.commit()
@@ -3491,7 +3508,13 @@ def delete_worker(session: Session, worker_id: int) -> bool:
 def update_worker(session: Session, worker_id: int, full_name: str | None = None, user_id: int | None = None, is_active: bool | None = None,
                   cedula: str | None = None, phone: str | None = None, email: str | None = None,
                   address: str | None = None, job_title: str | None = None, 
-                  start_date: datetime | None = None, salary: float | None = None) -> Worker | None:
+                  start_date: datetime | None = None, salary: float | None = None,
+                  payment_frequency: str | None = None,
+                  commission_pct: float | None = None, bonus_attendance: float | None = None,
+                  bonus_food: float | None = None, bonus_role: float | None = None,
+                  bank_account: str | None = None, pago_movil_cedula: str | None = None,
+                  pago_movil_phone: str | None = None, pago_movil_bank: str | None = None,
+                  binance_email: str | None = None, zelle_email: str | None = None) -> Worker | None:
     worker = session.get(Worker, worker_id)
     if not worker:
         return None
@@ -3519,11 +3542,36 @@ def update_worker(session: Session, worker_id: int, full_name: str | None = None
         worker.address = address
     if job_title is not None:
         worker.job_title = job_title
+    if payment_frequency is not None:
+        worker.payment_frequency = payment_frequency
     if start_date is not None:
         worker.start_date = start_date
     if salary is not None:
         worker.salary = salary
-        
+    if commission_pct is not None:
+        worker.commission_pct = commission_pct
+    if bonus_attendance is not None:
+        worker.bonus_attendance = bonus_attendance
+    if bonus_food is not None:
+        worker.bonus_food = bonus_food
+    if bonus_role is not None:
+        worker.bonus_role = bonus_role
+
+    # Banking fields
+    if bank_account is not None:
+        worker.bank_account = bank_account
+    if pago_movil_cedula is not None:
+        worker.pago_movil_cedula = pago_movil_cedula
+    if pago_movil_phone is not None:
+        worker.pago_movil_phone = pago_movil_phone
+    if pago_movil_bank is not None:
+        worker.pago_movil_bank = pago_movil_bank
+
+    if binance_email is not None:
+        worker.binance_email = binance_email
+    if zelle_email is not None:
+        worker.zelle_email = zelle_email
+
     session.commit()
     session.refresh(worker)
     return worker
@@ -3670,3 +3718,51 @@ def get_pending_orders_for_user(session: Session, user_id: int) -> list[Order]:
     orders.sort(key=lambda x: x.created_at)
     
     return orders
+
+
+def get_payroll_status_by_month(session: Session, year: int, month: int) -> dict[int, dict[str, bool]]:
+    """
+    Returns a dict mapping worker_id -> {'q1': bool, 'q2': bool}
+    indicating if they have been paid for Query 1 or Query 2 of the specified month.
+    """
+    from .models import Transaction, TransactionCategory
+    from sqlalchemy import extract, and_
+    
+    # Find Category ID for 'Nómina'
+    cat = session.query(TransactionCategory).filter(TransactionCategory.name == "Nómina").first()
+    if not cat:
+        return {}
+        
+    # Query transactions for this month/year for category 'Nómina' linked to workers
+    txs = session.query(Transaction).filter(
+        and_(
+            extract('year', Transaction.date) == year,
+            extract('month', Transaction.date) == month,
+            Transaction.category_id == cat.id,
+            Transaction.related_table == "workers",
+            Transaction.related_id.isnot(None)
+        )
+    ).all()
+    
+    status = {}
+    for tx in txs:
+        wid = tx.related_id
+        if wid not in status:
+            status[wid] = {'q1': False, 'q2': False}
+            
+        desc = tx.description.upper()
+        
+        # Check explicit tags
+        if "[Q1]" in desc:
+            status[wid]['q1'] = True
+        elif "[Q2]" in desc:
+            status[wid]['q2'] = True
+        else:
+            # Fallback by date
+            day = tx.date.day
+            if day <= 15:
+                status[wid]['q1'] = True
+            else:
+                status[wid]['q2'] = True
+                
+    return status

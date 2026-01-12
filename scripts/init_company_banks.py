@@ -22,7 +22,7 @@ def init_banks():
             print(f"Creating account: {bank_name} (VES)")
             new_acc = Account(
                 name=bank_name,
-                type='bank',
+                type='BANK',
                 currency='VES',
                 balance=0.0,
                 is_active=True
@@ -38,7 +38,7 @@ def init_banks():
          print("Creating account: Zelle (USD)")
          new_zelle = Account(
             name="Zelle",
-            type='bank',
+            type='DIGITAL',
             currency='USD',
             balance=0.0,
             is_active=True

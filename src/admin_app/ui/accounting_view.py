@@ -305,9 +305,14 @@ class TransactionsManager(QWidget):
         btn_filter.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 6px 12px; border-radius: 4px;")
         btn_filter.clicked.connect(self.load_data)
         
+        btn_update = QPushButton("Actualizar")
+        btn_update.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 6px 12px; border-radius: 4px; margin-left: 4px;")
+        btn_update.clicked.connect(self.refresh_view)
+        
         top_layout.addWidget(QLabel("Desde:"))
         top_layout.addWidget(self.date_filter)
         top_layout.addWidget(btn_filter)
+        top_layout.addWidget(btn_update)
         top_layout.addStretch()
         
         # Custom "Card-like" buttons style
@@ -536,6 +541,11 @@ class TransactionsManager(QWidget):
                 
         # Trigger selection change to update buttons for initial state
         self._on_selection_changed()
+
+    def refresh_view(self):
+        """Force reload of data and notify parent to update dashboard"""
+        self.load_data()
+        self.data_changed.emit()
 
     def open_add_dialog(self):
         dlg = TransactionDialog(self.session_factory, self)

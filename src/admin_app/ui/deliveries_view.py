@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QAbstractItemView, QDialog, QFormLayout,
     QComboBox, QDateEdit, QDateTimeEdit, QDialogButtonBox, QMessageBox, QLabel, QTextEdit,
-    QGroupBox, QLineEdit, QDoubleSpinBox, QMenu
+    QGroupBox, QLineEdit, QDoubleSpinBox, QMenu, QCheckBox
 )
 from PySide6.QtCore import Qt, QDate, QDateTime
 from sqlalchemy.orm import sessionmaker, joinedload, contains_eager
@@ -348,6 +348,11 @@ class CreateDeliveryDialog(QDialog):
         self.cb_orders = QComboBox()
         self.cb_zones = QComboBox()
         self.cb_users = QComboBox()
+
+        # Checkbox para mandados
+        self.chk_errand = QCheckBox("Es Mandado/Diligencia (Sin Orden)")
+        self.chk_errand.toggled.connect(self._toggle_errand)
+        form_assign.addRow("", self.chk_errand)
         
         form_assign.addRow("Orden:", self.cb_orders)
         form_assign.addRow("Zona Destino:", self.cb_zones)
@@ -442,10 +447,16 @@ class CreateDeliveryDialog(QDialog):
         # self.spin_amount_bs.setEnabled(method == 'EMPRESA') 
         # I'll enable it always just in case they want to record it
         pass
+    
+    def _toggle_errand(self, checked):
+        self.cb_orders.setEnabled(not checked)
+        if checked:
+            self.cb_orders.setCurrentIndex(-1)
+        # If unchecked, we might want to restore selection or just leave it blank
 
     def validate_and_accept(self):
-        if self.cb_orders.currentIndex() == -1:
-            QMessageBox.warning(self, "Error", "Debe seleccionar una orden.")
+        if not self.chk_errand.isChecked() and self.cb_orders.currentIndex() == -1:
+            QMessageBox.warning(self, "Error", "Debe seleccionar una orden o marcar 'Es Mandado'.")
             return
         if self.cb_zones.currentIndex() == -1:
             QMessageBox.warning(self, "Error", "Debe seleccionar una zona.")
@@ -453,8 +464,12 @@ class CreateDeliveryDialog(QDialog):
         self.accept()
 
     def get_data(self):
+        order_id = self.cb_orders.currentData()
+        if self.chk_errand.isChecked():
+            order_id = None
+            
         return {
-            "order_id": self.cb_orders.currentData(),
+            "order_id": order_id,
             "zone_id": self.cb_zones.currentData(),
             "user_id": self.cb_users.currentData(),
             "payment_source": self.cb_payment.currentData(),
@@ -883,8 +898,8 @@ class DeliveriesView(QWidget):
             # Join Order -> Sale -> Customer (Outer Join for Customer in case not present)
             query = session.query(Delivery, Customer.short_address)\
                 .select_from(Delivery)\
-                .join(Order, Delivery.order_id == Order.id)\
-                .join(Sale, Order.sale_id == Sale.id)\
+                .outerjoin(Order, Delivery.order_id == Order.id)\
+                .outerjoin(Sale, Order.sale_id == Sale.id)\
                 .outerjoin(Customer, Sale.cliente_id == Customer.id)\
                 .options(
                     joinedload(Delivery.zone),
@@ -899,9 +914,9 @@ class DeliveriesView(QWidget):
                 self.all_deliveries.append({
                     "id": d.id,
                     "date": d.sent_at,
-                    "order_num": d.order.order_number if d.order else "",
+                    "order_num": d.order.order_number if d.order else "DILIGENCIA",
                     "zone": d.zone.name if d.zone else "",
-                    "address": address if address else "",
+                    "address": address if address else (d.notes or ""),
                     "price": d.zone.price if d.zone else 0.0,
                     "amount_bs": d.amount_bs if hasattr(d, 'amount_bs') else 0.0,
                     "payment_source": d.payment_source if hasattr(d, 'payment_source') and d.payment_source else "EMPRESA",
