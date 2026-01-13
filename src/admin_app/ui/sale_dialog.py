@@ -350,10 +350,17 @@ class SaleDialog(QDialog):
         self.edt_inst.setEnabled(False)
         grid_extras.addWidget(self.edt_inst, 1, 3)
         
-        # Row 2: Descripción
-        grid_extras.addWidget(QLabel("Descripción:", self), 2, 0)
+        # Row 2: Delivery (mover desde Resumen a Extras)
+        self.edt_delivery.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.edt_delivery.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.edt_delivery.setFixedWidth(100)
+        grid_extras.addWidget(QLabel("Delivery $:", self), 2, 0)
+        grid_extras.addWidget(self.edt_delivery, 2, 1, 1, 3)
+
+        # Row 3: Descripción
+        grid_extras.addWidget(QLabel("Descripción:", self), 3, 0)
         self.edt_descripcion.setPlaceholderText("Descripción adicional...")
-        grid_extras.addWidget(self.edt_descripcion, 2, 1, 1, 3)
+        grid_extras.addWidget(self.edt_descripcion, 3, 1, 1, 3)
         
         self.grp_extras.setLayout(grid_extras)
         main_col.addWidget(self.grp_extras)
@@ -1325,6 +1332,9 @@ class SaleDialog(QDialog):
         self.edt_monto_calculado.setReadOnly(True)
         self.edt_abono = QDoubleSpinBox(self)
         self._conf_money(self.edt_abono, prefix="")
+        # Delivery $ (Campo manual para costos de envío)
+        self.edt_delivery = QDoubleSpinBox(self)
+        self._conf_money(self.edt_delivery, prefix="", maxv=99999.99)
         self.out_restante = QDoubleSpinBox(self)
         self._conf_money(self.out_restante, prefix="")
         self.out_restante.setReadOnly(True)
@@ -1521,7 +1531,7 @@ class SaleDialog(QDialog):
         self.out_descuento.valueChanged.connect(self._update_totals)
         
         # Conectar actualizaciones de totales
-        for sp in (self.edt_total_bs, self.edt_abono, self.edt_diseno, self.edt_ingresos):
+        for sp in (self.edt_total_bs, self.edt_abono, self.edt_diseno, self.edt_ingresos, self.edt_delivery):
             sp.valueChanged.connect(self._update_totals)
         self.chk_iva.toggled.connect(self._update_totals)
         # Checkbox de diseño: habilita el campo de diseño y fuerza recálculo
@@ -1781,9 +1791,10 @@ class SaleDialog(QDialog):
             # Extras
             diseno = self.edt_diseno.value() if self.chk_incluye_diseno.isChecked() else 0.0
             inst = self.edt_inst.value() if hasattr(self, 'edt_inst') and self.chk_incluye_inst.isChecked() else 0.0
+            delivery = self.edt_delivery.value() if hasattr(self, 'edt_delivery') else 0.0
             
             # Subtotal base antes de descuento
-            subtotal_bruto = subtotal_usd + diseno + inst
+            subtotal_bruto = subtotal_usd + diseno + inst + delivery
             
             # Descuento (Porcentaje)
             porcentaje_desc = self.out_descuento.value()
@@ -1800,7 +1811,7 @@ class SaleDialog(QDialog):
             total_usd = base_imponible + iva
             
             # Actualizar campos de salida
-            self.out_subtotal.setValue(subtotal_usd)
+            self.out_subtotal.setValue(subtotal_bruto)
             self.out_descuento_monto.setValue(monto_descuento)
             self.out_iva.setValue(iva)
             if hasattr(self, 'out_iva_subtotal'): self.out_iva_subtotal.setValue(iva)
@@ -1937,6 +1948,7 @@ class SaleDialog(QDialog):
                 "iva": f"{self.out_iva.value():.2f}",
                 "iva_aplicado": self.chk_iva.isChecked(),
                 "diseno_usd": f"{self.edt_diseno.value():.2f}",
+                "delivery_usd": f"{self.edt_delivery.value():.2f}" if hasattr(self, 'edt_delivery') else "0.00",
                 "incluye_diseno": self.chk_incluye_diseno.isChecked(),
                 "ingresos_usd": f"{self.edt_inst.value():.2f}" if hasattr(self, 'edt_inst') else "0.00", # Map INST to ingresos_usd
                 "descripcion": self.edt_descripcion.text(),
@@ -2239,7 +2251,11 @@ class SaleDialog(QDialog):
                         except: pass
                         
                         w_bank = self.tbl_payments.cellWidget(row, 3)
-                        w_bank.setText(pay.get('bank', '') or pay.get('serial_billete', '') or '')
+                        val_bank = pay.get('bank', '') or pay.get('serial_billete', '') or ''
+                        if isinstance(w_bank, QComboBox):
+                            w_bank.setCurrentText(val_bank)
+                        elif isinstance(w_bank, QLineEdit):
+                            w_bank.setText(val_bank)
                         
                         w_ref = self.tbl_payments.cellWidget(row, 4)
                         w_ref.setText(pay.get('reference', ''))
@@ -2263,7 +2279,11 @@ class SaleDialog(QDialog):
                         except: pass
                         
                         w_bank = self.tbl_payments.cellWidget(row, 3)
-                        w_bank.setText(data.get("banco") or data.get("serial_billete") or "")
+                        val_bank = data.get("banco") or data.get("serial_billete") or ""
+                        if isinstance(w_bank, QComboBox):
+                            w_bank.setCurrentText(val_bank)
+                        elif isinstance(w_bank, QLineEdit):
+                            w_bank.setText(val_bank)
                         
                         w_ref = self.tbl_payments.cellWidget(row, 4)
                         w_ref.setText(data.get("referencia") or "")
@@ -2271,6 +2291,9 @@ class SaleDialog(QDialog):
             # 6. Extras
             if v := data.get("diseno_usd"):
                 self.edt_diseno.setValue(float(v))
+            if v := data.get("delivery_usd"):
+                if hasattr(self, 'edt_delivery'):
+                    self.edt_delivery.setValue(float(v))
             if v := data.get("incluye_diseno"):
                 self.chk_incluye_diseno.setChecked(str(v) in ("1", "true", "True"))
             if v := data.get("ingresos_usd"):

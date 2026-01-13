@@ -5,7 +5,7 @@
 		{
 			"label": "Run App",
 			"type": "shell",
-			"command": "C:/Users/Jesus/OneDrive/Documents/Sistema-Admin-2.0/.venv/Scripts/python.exe",
+			"command": ".\\.venv\\Scripts\\python.exe",
 			"args": [
 				"-B",
 				"-m",
@@ -23,7 +23,7 @@
 		{
 			"label": "Run Tests",
 			"type": "shell",
-			"command": "C:/Users/Jesus/OneDrive/Documents/Sistema-Admin-2.0/.venv/Scripts/python.exe",
+			"command": ".\\.venv\\Scripts\\python.exe",
 			"args": [
 				"-m",
 				"pytest",
@@ -34,6 +34,18 @@
 			},
 			"problemMatcher": [],
 			"group": "test"
+		},
+		{
+			"label": "Debug Sale Delivery",
+			"type": "shell",
+			"command": ".\\.venv\\Scripts\\python.exe",
+			"args": [
+				"-B",
+				"scripts/debug_sale_delivery.py"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
 		}
 	]
 }

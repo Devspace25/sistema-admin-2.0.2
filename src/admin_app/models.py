@@ -268,6 +268,7 @@ class Sale(Base):
     # Impuestos y servicios adicionales
     iva: Mapped[float | None] = mapped_column(Float)  # IVA (solo se completa si se cobra IVA en ventas bs)
     diseno_usd: Mapped[float | None] = mapped_column(Float)  # Diseño $ (si la venta lleva diseño)
+    delivery_usd: Mapped[float | None] = mapped_column(Float, default=0.0) # Delivery $ (si empresa cobra delivery)
     ingresos_usd: Mapped[float | None] = mapped_column(Float)  # Ingresos $ (si venta en divisas, cantidad que ingresó)
     
     # Campos adicionales

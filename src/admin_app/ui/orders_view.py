@@ -227,6 +227,14 @@ class OrdersView(QWidget):
                 except RuntimeError:
                     pass
             events.order_created.connect(safe_refresh)
+            
+            def safe_refresh_void():
+                try:
+                    if self.isVisible():
+                        self.refresh()
+                except RuntimeError:
+                    pass
+            events.sale_updated.connect(safe_refresh_void)
         except Exception:
             pass
 
@@ -242,6 +250,10 @@ class OrdersView(QWidget):
         self.btn_delete.setVisible(self._can_delete)
         # Refrescar tabla para actualizar widgets de estado y diseñador
         self._apply_filter()
+
+    def load_data(self) -> None:
+        """Contrato usado por MainWindow/DbWatcher para refrescar la vista."""
+        self.refresh()
 
     def refresh(self) -> None:
         if self._loading:

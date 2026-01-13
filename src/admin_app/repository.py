@@ -567,8 +567,18 @@ def set_role_permissions(session: Session, *, role_id: int, permission_ids: list
 
 def init_db(engine, seed: bool = True) -> None:
     """Crea tablas y opcionalmente inserta datos de ejemplo."""
-    Base.metadata.create_all(bind=engine)
+    
+    # 1. Intentar usar Alembic si está disponible
+    try:
+        from .migrations import run_migrations
+        run_migrations(engine)
+    except Exception as e:
+        print(f"Advertencia: No se pudo ejecutar migraciones automáticas: {e}")
+        # Fallback a create_all si falla la migración o no hay archivos
+        Base.metadata.create_all(bind=engine)
+
     # Migración ligera: asegurar columnas nuevas en customers
+    # MANTENER POR COMPATIBILIDAD SI ALEMBIC NO CORRIÓ
     insp = inspect(engine)
     cols = {c['name'] for c in insp.get_columns('customers')} if insp.has_table('customers') else set()
     needed = {"first_name", "last_name", "document", "short_address", "phone"}
@@ -858,41 +868,7 @@ def init_db(engine, seed: bool = True) -> None:
                     Customer(name="Carol", first_name="Carol", last_name="Chen", document="V-87654321", short_address="Av. 3", phone="0416-2222222", email="carol@example.com"),
                 ]
             )
-        if session.query(Sale).count() == 0:
-            # Crear ventas de ejemplo usando la nueva función add_sale
-            with session:
-                add_sale(
-                    session,
-                    articulo="Letras Corpóreas Acrílico",
-                    asesor="Juan Pérez",
-                    venta_usd=150.0,
-                    forma_pago="Efectivo $",
-                    serial_billete="AB123456",
-                    abono_usd=150.0,
-                    ingresos_usd=150.0,  # Ingresos = Abono para efectivo $
-                )
-                add_sale(
-                    session,
-                    articulo="Logo LED",
-                    asesor="Maria González",
-                    venta_usd=280.0,
-                    forma_pago="Pago Móvil",
-                    banco="Banesco",
-                    referencia="123456789",
-                    monto_bs=14000.0,
-                    abono_usd=100.0,
-                    diseno_usd=30.0
-                )
-                add_sale(
-                    session,
-                    articulo="Rótulo Acrílico",
-                    asesor="Carlos Ruiz",
-                    venta_usd=200.0,
-                    forma_pago="Efectivo $",
-                    serial_billete="CD789012",
-                    abono_usd=120.0,  # Solo abonó $120 de $200
-                    ingresos_usd=120.0,  # Ingresos = Abono ($120)
-                )
+            
         session.commit()
 
         # Seed materiales base
@@ -1284,6 +1260,7 @@ def add_sale(
     abono_usd: float | None = None,
     iva: float | None = None,
     diseno_usd: float | None = None,
+    delivery_usd: float | None = None,
     ingresos_usd: float | None = None,
     notes: str | None = None,
     descripcion: str | None = None,
@@ -1371,12 +1348,13 @@ def add_sale(
         referencia=referencia,
         fecha_pago=fecha_pago,
         monto_bs=monto_bs,
-    monto_usd_calculado=monto_usd_calculado,
-    tasa_bcv=tasa_bcv,
+        monto_usd_calculado=monto_usd_calculado,
+        tasa_bcv=tasa_bcv,
         abono_usd=abono_usd,
         restante=restante,
         iva=iva,
         diseno_usd=diseno_usd,
+        delivery_usd=delivery_usd,
         ingresos_usd=ingresos_usd,
         notes=notes,
         cliente=cliente,

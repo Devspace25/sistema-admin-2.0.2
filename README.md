@@ -1,4 +1,4 @@
-# Sistema-Admin-2.0 (Python + PySide6)
+![1768307293703](image/README/1768307293703.png)![1768307300656](image/README/1768307300656.png)# Sistema-Admin-2.0 (Python + PySide6)
 
 Este proyecto es un punto de partida para un sistema administrativo de escritorio en Python usando PySide6 (Qt for Python) y SQLite.
 

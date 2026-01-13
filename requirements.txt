@@ -9,3 +9,4 @@ psycopg[binary]>=3.1
 
 openpyxl>=3.1
 pywin32>=306
+alembic>=1.13.1

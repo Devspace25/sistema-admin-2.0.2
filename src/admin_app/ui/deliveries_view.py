@@ -5,13 +5,17 @@ from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDateTimeEdit, QDialogButtonBox, QMessageBox, QLabel, QTextEdit,
     QGroupBox, QLineEdit, QDoubleSpinBox, QMenu, QCheckBox
 )
-from PySide6.QtCore import Qt, QDate, QDateTime
+from PySide6.QtCore import Qt, QDate, QDateTime, QTimer
 from sqlalchemy.orm import sessionmaker, joinedload, contains_eager
 from datetime import datetime, time
+import os
 
-from ..models import Delivery, DeliveryZone, Order, User, Sale, Customer, DeliveryPayment, Account, Transaction, TransactionCategory
+from ..models import Delivery, DeliveryZone, Order, User, Sale, Customer, DeliveryPayment, Account, Transaction, TransactionCategory, SalePayment
+from ..events import events
 from .delivery_zones_view import DeliveryZonesView
 from sqlalchemy import func
+from ..exchange import get_bcv_rate
+from ..services.delivery_sale_sync import infer_delivery_charge
 
 class PaymentDialog(QDialog):
     def __init__(self, session_factory, start_date, end_date, parent=None):
@@ -196,8 +200,8 @@ class PaymentHistoryDialog(QDialog):
         layout = QVBoxLayout(self)
         
         self.table = QTableWidget()
-        self.table.setColumnCount(7) # ID, Rider, Fecha Pago, Cantidad, Monto, Notas, Ver
-        self.table.setHorizontalHeaderLabels(["ID", "Motorizado", "Fecha Pago", "Carreras", "Monto", "Notas", "Detalles"])
+        self.table.setColumnCount(8) # ID, Rider, Fecha Pago, Cantidad, Monto, Notas, Ver, Eliminar
+        self.table.setHorizontalHeaderLabels(["ID", "Motorizado", "Fecha Pago", "Carreras", "Monto", "Notas", "Detalles", "Eliminar"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.Stretch)
@@ -231,10 +235,63 @@ class PaymentHistoryDialog(QDialog):
                 btn_view.setStyleSheet("background-color: #3498db; color: white; border: none; padding: 4px; border-radius: 4px;")
                 btn_view.clicked.connect(lambda _, pid=p.id: self.show_details(pid))
                 self.table.setCellWidget(i, 6, btn_view)
+
+                btn_delete = QPushButton("Eliminar")
+                btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_delete.setStyleSheet("background-color: #c0392b; color: white; border: none; padding: 4px; border-radius: 4px;")
+                btn_delete.clicked.connect(lambda _, pid=p.id: self.delete_payment(pid))
+                self.table.setCellWidget(i, 7, btn_delete)
                 
     def show_details(self, payment_id):
         dlg = PaymentDetailsDialog(payment_id, self.session_factory, self)
         dlg.exec()
+
+    def delete_payment(self, payment_id):
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Eliminación",
+            "¿Estás seguro que deseas eliminar este pago?\n\n"
+            "- Las carreras asociadas volverán a estar pendientes de pago.\n"
+            "- Se revesará la transacción contable (se devolverá el dinero a la cuenta).\n\n"
+            "Esta acción no se puede deshacer.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                with self.session_factory() as session:
+                    payment = session.get(DeliveryPayment, payment_id)
+                    if not payment:
+                        return
+
+                    # 1. Reverse Transaction
+                    txn = session.query(Transaction).filter(
+                        Transaction.related_table == "delivery_payments",
+                        Transaction.related_id == payment.id
+                    ).first()
+                    
+                    if txn:
+                        # Credit back to account
+                        if txn.account_id:
+                            acc = session.get(Account, txn.account_id)
+                            if acc:
+                                acc.balance += txn.amount
+                        
+                        session.delete(txn)
+                    
+                    # 2. Reset Deliveries
+                    deliveries = session.query(Delivery).filter(Delivery.payment_id == payment.id).all()
+                    for d in deliveries:
+                        d.payment_id = None
+                        
+                    # 3. Delete Payment
+                    session.delete(payment)
+                    session.commit()
+                    
+                    QMessageBox.information(self, "Eliminado", "Pago eliminado exitosamente.")
+                    self.load_data()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Error al eliminar pago: {e}")
 
 class PaymentDetailsDialog(QDialog):
     def __init__(self, payment_id, session_factory, parent=None):
@@ -295,7 +352,7 @@ class CreateDeliveryDialog(QDialog):
     def __init__(self, session_factory, parent=None):
         super().__init__(parent)
         self.session_factory = session_factory
-        self.setWindowTitle("Nuevo Despacho / Delivery")
+        self.setWindowTitle("Nuevo Despacho / Delivery (Auto-Sync)")
         self.resize(500, 500)
         
         # Style Refined to remove Blue Tint (#0b1220 -> #1a1a1a)
@@ -363,7 +420,7 @@ class CreateDeliveryDialog(QDialog):
         self.cb_payment.addItem("Empresa (Semanal)", "EMPRESA")
         self.cb_payment.addItem("Cliente (Directo)", "CLIENTE")
         self.cb_payment.currentIndexChanged.connect(self._toggle_amount_bs)
-        form_assign.addRow("¿Quién paga?:", self.cb_payment)
+        form_assign.addRow("¿Quién paga al Motorizado?:", self.cb_payment)
         
         # --- Amount BS ---
         self.spin_amount_bs = QDoubleSpinBox()
@@ -381,10 +438,66 @@ class CreateDeliveryDialog(QDialog):
             }
         """)
         self.form_assign = form_assign # Reference to show/hide row if needed, but we can just toggle Enabled
-        form_assign.addRow("Monto Acordado (Bs):", self.spin_amount_bs)
+        form_assign.addRow("Pago al Motorizado (Costo):", self.spin_amount_bs)
         
         grp_assign.setLayout(form_assign)
         layout.addWidget(grp_assign)
+
+        # --- Group 1.1: Pago del Cliente (Cuando paga a Empresa) ---
+        self.grp_client_payment = QGroupBox("Pago del Cliente (Ingreso a Caja)")
+        self.grp_client_payment.setVisible(True) # Default is EMPRESA
+        
+        # Use GridLayout to mimic "SaleDialog" Payment Section
+        # Columns: Method | Amount Bs | Amount $ | Bank | Ref
+        layout_pay = QHBoxLayout()
+        layout_pay.setSpacing(8)
+
+        # 1. Method
+        self.cb_client_method = QComboBox()
+        self.cb_client_method.addItems([
+            "---- Seleccione ----",
+            "Efectivo USD", "Zelle", "Banesco Panamá", "Binance", "PayPal",
+            "Efectivo Bs.D", "Pago móvil", "Transferencia Bs.D", "Punto de Venta"
+        ])
+        
+        # 2. Amount Bs
+        self.spin_client_amount_bs = QDoubleSpinBox()
+        self.spin_client_amount_bs.setRange(0, 100000000)
+        self.spin_client_amount_bs.setPrefix("Bs. ")
+        self.spin_client_amount_bs.setDecimals(2)
+        self.spin_client_amount_bs.setSpecialValueText("Bs. 0.00")
+        
+        # 3. Amount USD
+        self.spin_client_amount_usd = QDoubleSpinBox()
+        self.spin_client_amount_usd.setRange(0, 1000000)
+        self.spin_client_amount_usd.setPrefix("$ ")
+        self.spin_client_amount_usd.setDecimals(2)
+        
+        # 4. Bank (Combo/Edit)
+        self.cb_client_bank = QComboBox()
+        self.cb_client_bank.setEditable(True)
+        self.cb_client_bank.setPlaceholderText("Banco / Serial")
+        self.cb_client_bank.setMinimumWidth(150)
+        
+        # 5. Reference
+        self.edt_client_ref = QLineEdit()
+        self.edt_client_ref.setPlaceholderText("Referencia...")
+        
+        # Add to layout
+        layout_pay.addWidget(QLabel("Método:"))
+        layout_pay.addWidget(self.cb_client_method, 2)
+        
+        layout_pay.addWidget(QLabel("Monto Bs:"))
+        layout_pay.addWidget(self.spin_client_amount_bs, 1)
+        
+        layout_pay.addWidget(QLabel("Monto $:"))
+        layout_pay.addWidget(self.spin_client_amount_usd, 1)
+        
+        layout_pay.addWidget(self.cb_client_bank, 2)
+        layout_pay.addWidget(self.edt_client_ref, 2)
+        
+        self.grp_client_payment.setLayout(layout_pay)
+        layout.addWidget(self.grp_client_payment)
 
         # --- Group 2: Detalles ---
         grp_details = QGroupBox("Detalles de Salida")
@@ -406,6 +519,18 @@ class CreateDeliveryDialog(QDialog):
         
         grp_details.setLayout(form_details)
         layout.addWidget(grp_details)
+        
+        # Connect signal after elements created
+        self.cb_payment.currentIndexChanged.connect(self._toggle_amount_bs)
+        
+        # New Signals for auto-calculation
+        self.cb_zones.currentIndexChanged.connect(self._on_zone_changed)
+        self.cb_client_method.currentIndexChanged.connect(self._on_method_changed)
+        self.spin_client_amount_usd.valueChanged.connect(self._sync_from_usd)
+        self.spin_client_amount_bs.valueChanged.connect(self._sync_from_bs)
+
+        # Init state
+        self._toggle_amount_bs()
 
         # Load data
         self.load_data()
@@ -415,6 +540,84 @@ class CreateDeliveryDialog(QDialog):
         btns.accepted.connect(self.validate_and_accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+
+    def _on_zone_changed(self):
+        # Extract price from text since itemData is ID
+        txt = self.cb_zones.currentText()
+        if '-' in txt and '$' in txt:
+            try:
+                price_str = txt.split('$')[-1].strip()
+                price = float(price_str)
+                # Set USD amount initially
+                self.spin_client_amount_usd.setValue(price)
+                # This will trigger _sync_from_usd -> which also calcs Bs and updates Rider Payment
+            except:
+                pass
+
+    def _on_method_changed(self):
+        # Update Bank Combo Logic if needed (like populating specific banks)
+        method = self.cb_client_method.currentText().lower()
+        
+        # Logic to enable/disable fields based on method currency
+        is_usd_method = any(x in method for x in ['efectivo usd', 'zelle', 'panamá', 'usd', 'binance', 'paypal'])
+        
+        # If USD Method, we prefer user input in USD
+        # If BS Method, we prefer input in Bs
+        
+        # Banks population
+        self.cb_client_bank.clear()
+        if "pago móvil" in method:
+             self.cb_client_bank.addItems(["Banesco", "Venezuela", "Mercantil", "Provincial", "BNC"])
+        elif "zelle" in method:
+             self.cb_client_bank.addItems(["Chase", "Wells Fargo", "Bofa", "Citi"])
+        
+        self.cb_client_bank.setPlaceholderText("Banco / Serial")
+        
+        # Re-trigger sync to update rider payment correctly
+        if is_usd_method:
+            self._sync_from_usd()
+        else:
+            self._sync_from_bs()
+
+    def _sync_from_usd(self):
+        """Calculates Bs equiv from USD input, updates Bs spin handling locking logic implicitly"""
+        if self.cb_payment.currentData() != 'EMPRESA': return
+        
+        usd_val = self.spin_client_amount_usd.value()
+        rate = get_bcv_rate() or 36.0
+        
+        bs_equiv = usd_val * rate
+        
+        # Update Bs Field
+        self.spin_client_amount_bs.blockSignals(True)
+        self.spin_client_amount_bs.setValue(bs_equiv)
+        self.spin_client_amount_bs.blockSignals(False)
+        
+        # Update Rider Payment (Cost)
+        # Assuming rider gets paid equivalent in Bs no matter what
+        self.spin_amount_bs.setValue(bs_equiv)
+
+    def _sync_from_bs(self):
+        """Calculates USD equiv from Bs input"""
+        if self.cb_payment.currentData() != 'EMPRESA': return
+        
+        bs_val = self.spin_client_amount_bs.value()
+        rate = get_bcv_rate() or 36.0
+        
+        usd_equiv = 0.0
+        if rate > 0:
+            usd_equiv = bs_val / rate
+            
+        # Update USD Field
+        self.spin_client_amount_usd.blockSignals(True)
+        self.spin_client_amount_usd.setValue(usd_equiv)
+        self.spin_client_amount_usd.blockSignals(False)
+        
+        # Update Rider Payment
+        self.spin_amount_bs.setValue(bs_val)
+
+    def _sync_rider_payment(self):
+        pass # Deprecated by _sync_from_usd/bs logic above
 
     def load_data(self):
         with self.session_factory() as session:
@@ -439,20 +642,21 @@ class CreateDeliveryDialog(QDialog):
                 self.cb_orders.addItem(label, o.id)
 
     def _toggle_amount_bs(self):
-        # Enable Amount BS only if EMPRESA pays? Or both?
-        # User said: "cuando la empresa paga se fija un monto en bs". 
-        # Usually if client pays, the rider just keeps the money, maybe we don't track the exact BS amount, or maybe we do.
-        # Let's keep it enabled but maybe highlight it when EMPRESA is selected.
         method = self.cb_payment.currentData()
-        # self.spin_amount_bs.setEnabled(method == 'EMPRESA') 
-        # I'll enable it always just in case they want to record it
-        pass
-    
+        # If EMPRESA (Company pays rider), we likely charged client. 
+        # Show Client Payment Group
+        if method == 'EMPRESA':
+            self.grp_client_payment.setVisible(True)
+        else:
+            self.grp_client_payment.setVisible(False)
+            
     def _toggle_errand(self, checked):
         self.cb_orders.setEnabled(not checked)
         if checked:
             self.cb_orders.setCurrentIndex(-1)
-        # If unchecked, we might want to restore selection or just leave it blank
+            self.grp_client_payment.setVisible(False) # Usually errands are internal expenses, not sales charging
+        else:
+            self._toggle_amount_bs() # Restore based on payment source
 
     def validate_and_accept(self):
         if not self.chk_errand.isChecked() and self.cb_orders.currentIndex() == -1:
@@ -461,11 +665,20 @@ class CreateDeliveryDialog(QDialog):
         if self.cb_zones.currentIndex() == -1:
             QMessageBox.warning(self, "Error", "Debe seleccionar una zona.")
             return
+            
+        # If company pays rider (implies charging client), validate charge
+        if self.cb_payment.currentData() == 'EMPRESA' and not self.chk_errand.isChecked():
+            # If standard delivery for an order
+            if self.spin_client_amount_usd.value() <= 0 and self.spin_amount_bs.value() <= 0:
+                # Warn if both are zero
+                pass
+                
         self.accept()
 
     def get_data(self):
         order_id = self.cb_orders.currentData()
-        if self.chk_errand.isChecked():
+        is_errand = self.chk_errand.isChecked()
+        if is_errand:
             order_id = None
             
         return {
@@ -475,7 +688,13 @@ class CreateDeliveryDialog(QDialog):
             "payment_source": self.cb_payment.currentData(),
             "amount_bs": self.spin_amount_bs.value(),
             "date": self.dt_sent.dateTime(),
-            "notes": self.txt_notes.toPlainText()
+            "notes": self.txt_notes.toPlainText(),
+            # Client Payment Data Detailed
+            "client_method": self.cb_client_method.currentText() if not is_errand else None,
+            "client_ref": self.edt_client_ref.text() if not is_errand else None,
+            "client_amount_bs": self.spin_client_amount_bs.value() if not is_errand else 0.0,
+            "client_amount_usd": self.spin_client_amount_usd.value() if not is_errand else 0.0,
+            "client_bank": self.cb_client_bank.currentText() if not is_errand else None
         }
 
 class EditDeliveryDialog(QDialog):
@@ -715,9 +934,9 @@ class DeliveriesView(QWidget):
         
         # --- Table ---
         self.table = QTableWidget()
-        self.table.setColumnCount(11)
+        self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Fecha Salida", "Orden", "Zona", "Dirección", "Precio ($)", "Monto (Bs)", "Pago Vía", "Motorizado", "Estado", "Pago Rider"
+            "ID", "Fecha Salida", "Orden", "Zona", "Dirección", "Precio ($)", "Monto (Bs)", "Pago Vía", "Motorizado", "Estado", "Pago Rider", "Editar", "Eliminar"
         ])
         
         header_view = self.table.horizontalHeader()
@@ -732,6 +951,8 @@ class DeliveriesView(QWidget):
         header_view.setSectionResizeMode(8, QHeaderView.Stretch)          # User
         header_view.setSectionResizeMode(9, QHeaderView.ResizeToContents) # Status (Delivery)
         header_view.setSectionResizeMode(10, QHeaderView.ResizeToContents) # Status (Payment)
+        header_view.setSectionResizeMode(11, QHeaderView.ResizeToContents) # Edit
+        header_view.setSectionResizeMode(12, QHeaderView.ResizeToContents) # Delete
         
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1001,6 +1222,22 @@ class DeliveriesView(QWidget):
             
             self.table.item(i, 0).setData(Qt.UserRole, item["obj_id"])
             
+            # Edit Button
+            btn_edit = QPushButton("✏️")
+            btn_edit.setToolTip("Editar Delivery")
+            btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_edit.setStyleSheet("background-color: #f39c12; color: white; border: none; padding: 4px; border-radius: 4px; font-size: 14px;")
+            btn_edit.clicked.connect(lambda _, did=item["id"]: self.edit_delivery(did))
+            self.table.setCellWidget(i, 11, btn_edit)
+
+            # Delete Button
+            btn_delete = QPushButton("🗑️")
+            btn_delete.setToolTip("Eliminar Delivery")
+            btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_delete.setStyleSheet("background-color: #c0392b; color: white; border: none; padding: 4px; border-radius: 4px; font-size: 14px;")
+            btn_delete.clicked.connect(lambda _, did=item["id"]: self.delete_delivery(did))
+            self.table.setCellWidget(i, 12, btn_delete)
+            
         self._status_label.setText(f"✅ {len(data)} entregas cargadas")
 
     def add_delivery(self):
@@ -1010,13 +1247,22 @@ class DeliveriesView(QWidget):
             
             # Format date correctly
             sent_date = data['date']
-            # If QDateTime, convert
             if hasattr(sent_date, 'toPython'): 
                  sent_date = sent_date.toPython() # Returns datetime
             
-            sent_dt = sent_date # Already datetime
+            sent_dt = sent_date
 
             with self.session_factory() as session:
+                sale_was_updated = False
+                # DEBUG LOGGING
+                try:
+                    os.makedirs("logs", exist_ok=True)
+                    with open("logs/delivery_debug.txt", "a", encoding='utf-8') as f:
+                        f.write(f"\n--- ADD DELIVERY DEBUG {datetime.now()} ---\n")
+                        f.write(f"Data: {data}\n")
+                except Exception as e:
+                    print(f"Log Error: {e}")
+
                 new_delivery = Delivery(
                     order_id=data['order_id'],
                     zone_id=data['zone_id'],
@@ -1028,7 +1274,106 @@ class DeliveriesView(QWidget):
                     amount_bs=data['amount_bs']
                 )
                 session.add(new_delivery)
+                
+                # Logic to update Sales and Create Payment if 'EMPRESA'
+                # Robust check for payment source
+                pay_source = str(data['payment_source']).strip().upper() if data['payment_source'] else ""
+                
+                if 'EMPRESA' in pay_source and data['order_id']:
+                    try:
+                        with open("logs/delivery_debug.txt", "a", encoding='utf-8') as f:
+                            f.write("Entering EMPRESA Logic\n")
+                    except: pass
+                    
+                    # Get associated order and sale
+                    order = session.get(Order, data['order_id'])
+                    if order and order.sale_id:
+                        sale = session.get(Sale, order.sale_id)
+                        if sale:
+                            # Extract Precise Values from new dialog fields
+                            method = data['client_method'] or "Desconocido"
+                            
+                            # Use exact amounts calculated by the dialog based on currency type
+                            amount_bs_input = float(data.get('client_amount_bs', 0.0) or 0.0)
+                            amount_usd_input = float(data.get('client_amount_usd', 0.0) or 0.0)
+                            
+                            try:
+                                with open("logs/delivery_debug.txt", "a", encoding='utf-8') as f:
+                                    f.write(f"Sale Found: {sale.id}. Method: {method}. Amounts: USD={amount_usd_input}, BS={amount_bs_input}\n")
+                            except: pass
+
+                            bank_input = data.get('client_bank')
+                            ref_input = data.get('client_ref')
+                            
+                            is_usd_method = any(x in method for x in ['Efectivo USD', 'Zelle', 'Panamá', 'USD', 'Binance', 'PayPal'])
+                            
+                            # Determine final values to add to Sale
+                            rate = get_bcv_rate() or 36.0
+
+                            # Intentar inferir el cargo del delivery (USD/Bs) si el usuario no llenó el monto.
+                            # Fallback adicional: usar el precio USD de la zona si amount_bs viene en 0.
+                            zone_price_usd = 0.0
+                            try:
+                                zone = session.get(DeliveryZone, data.get('zone_id'))
+                                zone_price_usd = float(getattr(zone, 'price', 0.0) or 0.0)
+                            except Exception:
+                                zone_price_usd = 0.0
+
+                            inference = infer_delivery_charge(
+                                amount_usd_input=amount_usd_input,
+                                amount_bs_input=amount_bs_input,
+                                delivery_amount_bs=float(data.get('amount_bs', 0.0) or 0.0),
+                                zone_price_usd=zone_price_usd,
+                                bcv_rate=rate,
+                            )
+                            amount_usd_input = inference.amount_usd_input
+                            amount_bs_input = inference.amount_bs_input
+                            usd_to_add = inference.usd_to_add
+                            
+                            try:
+                                with open("logs/delivery_debug.txt", "a", encoding='utf-8') as f:
+                                    f.write(f"Adding {usd_to_add} to Sale {sale.id}\n")
+                            except: pass
+                            
+                            # Update Sale Columns
+                            if usd_to_add and usd_to_add > 0:
+                                sale.delivery_usd = (sale.delivery_usd or 0.0) + usd_to_add
+                                sale.venta_usd = (sale.venta_usd or 0.0) + usd_to_add
+                                sale.abono_usd = (sale.abono_usd or 0.0) + usd_to_add
+                            
+                            # Add Ingresos USD ONLY if hard currency USD
+                            if is_usd_method:
+                                if usd_to_add and usd_to_add > 0:
+                                    sale.ingresos_usd = (sale.ingresos_usd or 0.0) + usd_to_add
+                            else:
+                                # Add to monto_bs track for legacy reasons or consistency if needed
+                                if amount_bs_input and amount_bs_input > 0:
+                                    sale.monto_bs = (sale.monto_bs or 0.0) + amount_bs_input
+
+                            # Create SalePayment with precise inputs
+                            if usd_to_add and usd_to_add > 0:
+                                new_pay = SalePayment(
+                                    sale_id=sale.id,
+                                    payment_method=method,
+                                    amount_bs=amount_bs_input,
+                                    amount_usd=usd_to_add,
+                                    exchange_rate=0.0 if is_usd_method else rate,
+                                    reference=ref_input,
+                                    payment_date=datetime.now(),
+                                    bank=bank_input
+                                )
+                                session.add(new_pay)
+                                sale_was_updated = True
+
                 session.commit()
+
+                # Notificar DESPUÉS del commit (si no, Ventas refresca y no ve cambios aún)
+                if sale_was_updated:
+                    # Encolar la señal para que Ventas refresque cuando el event loop esté libre
+                    try:
+                        QTimer.singleShot(0, events.sale_updated.emit)
+                    except Exception:
+                        pass
             self.refresh()
 
     def open_zones_dialog(self):

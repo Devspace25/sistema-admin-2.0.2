@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QDialogButtonBox, QGroupBox, QGridLayout, QSpacerItem,
     QSizePolicy, QAbstractItemView
 )
-from PySide6.QtCore import Qt, QDate, QEvent
+from PySide6.QtCore import Qt, QDate, QEvent, QTimer
 from PySide6.QtGui import QFont, QColor
 from datetime import datetime
 from sqlalchemy.orm import sessionmaker, joinedload
@@ -24,6 +24,7 @@ from ..repository import (
     user_has_role
 )
 from ..permissions import is_admin_user
+from ..events import events
 from .sale_dialog import SaleDialog as InvoiceSaleDialog
 
 
@@ -37,6 +38,9 @@ class SalesView(QWidget):
         self._can_create = False
         self._setup_ui()
         self._load_sales()
+        
+        # Connect events (encolado para evitar refresco en medio de otras operaciones)
+        events.sale_updated.connect(self._on_sale_updated)
         
     def set_current_user(self, username: str):
         self._current_user = username
@@ -57,6 +61,13 @@ class SalesView(QWidget):
     def refresh(self):
         """Alias para _load_sales compatible con la interfaz común."""
         self._load_sales()
+
+    def load_data(self):
+        """Contrato usado por MainWindow/DbWatcher para refrescar la vista."""
+        self._load_sales()
+
+    def _on_sale_updated(self):
+        QTimer.singleShot(0, self._load_sales)
         
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -164,7 +175,7 @@ class SalesView(QWidget):
             "ID", "Fecha", "Núm. Orden", "Artículo", "Descripción", "Asesor", "Cliente", "Venta $", 
             "Forma Pago", "Serial Billete", "Banco", "Referencia", "Fecha Pago",
             "Monto Bs.D", "Monto $ Calc.", "Tasa BCV", "Abono $", "Restante $", "IVA", "Por Cobrar $",
-            "Diseño $", "Ingresos $"
+            "Diseño $", "Delivery $", "Ingresos $"
         ]
         
         self.table.setColumnCount(len(columns))
@@ -350,6 +361,7 @@ class SalesView(QWidget):
                         f"${sale.iva:,.2f}" if sale.iva else "",
                         f"${sale.restante:,.2f}" if sale.restante else "",
                         f"${sale.diseno_usd:,.2f}" if sale.diseno_usd else "",
+                        f"${sale.delivery_usd:,.2f}" if getattr(sale, 'delivery_usd', 0) else "",
                         f"${real_ingresos_usd:,.2f}" if real_ingresos_usd > 0 else "",
                     ]
                     
@@ -460,6 +472,7 @@ class SalesView(QWidget):
                     'abono_usd': f('abono_usd'),
                     'iva': f('iva'),
                     'diseno_usd': f('diseno_usd'),
+                    'delivery_usd': f('delivery_usd'),
                     'ingresos_usd': f('ingresos_usd'),
                     'notes': data.get('notas') or None,
                     # Campos para creación automática de pedido
@@ -669,6 +682,7 @@ class SalesView(QWidget):
                 data["abono_usd"] = f"{(getattr(sale, 'abono_usd', 0.0) or 0.0):.2f}"
                 data["iva"] = f"{(getattr(sale, 'iva', 0.0) or 0.0):.2f}"
                 data["diseno_usd"] = f"{(getattr(sale, 'diseno_usd', 0.0) or 0.0):.2f}"
+                data["delivery_usd"] = f"{(getattr(sale, 'delivery_usd', 0.0) or 0.0):.2f}"
                 # Reflejar si la venta ya incluye diseño para preseleccionar la casilla.
                 # Compatibilidad: si el flag `incluye_diseno` no existe, marcar la casilla
                 # cuando `diseno_usd` > 0 (ventas antiguas).

@@ -293,28 +293,8 @@ class TransactionsManager(QWidget):
         top_container.setStyleSheet(".QWidget { background-color: transparent; }")
         top_layout = QHBoxLayout(top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(10)
 
-        # Left: Date Filter
-        self.date_filter = QDateEdit()
-        self.date_filter.setCalendarPopup(True)
-        self.date_filter.setDate(QDate.currentDate().addDays(-30)) # Last 30 days
-        self.date_filter.setFixedWidth(110)
-        self.date_filter.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 5px; border-radius: 4px;")
-        
-        btn_filter = QPushButton("Filtrar")
-        btn_filter.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 6px 12px; border-radius: 4px;")
-        btn_filter.clicked.connect(self.load_data)
-        
-        btn_update = QPushButton("Actualizar")
-        btn_update.setStyleSheet("background-color: #1f2937; color: white; border: 1px solid #374151; padding: 6px 12px; border-radius: 4px; margin-left: 4px;")
-        btn_update.clicked.connect(self.refresh_view)
-        
-        top_layout.addWidget(QLabel("Desde:"))
-        top_layout.addWidget(self.date_filter)
-        top_layout.addWidget(btn_filter)
-        top_layout.addWidget(btn_update)
-        top_layout.addStretch()
-        
         # Custom "Card-like" buttons style
         # White background, subtle border, specific text colors
         btn_bg = "#ffffff"
@@ -329,6 +309,7 @@ class TransactionsManager(QWidget):
                 font-size: 13px;
                 padding: 6px 16px;
                 text-align: center;
+                color: #374151;
             }}
             QPushButton:hover {{
                 background-color: #f8fafc;
@@ -338,6 +319,40 @@ class TransactionsManager(QWidget):
                 background-color: #f1f5f9;
             }}
         """
+
+        input_style = f"""
+            QDateEdit {{
+                background-color: {btn_bg};
+                border: 1px solid {btn_border};
+                border-radius: 6px;
+                font-size: 13px;
+                padding: 5px;
+                color: #374151;
+            }}
+        """
+
+        # Left: Date Filter
+        self.date_filter = QDateEdit()
+        self.date_filter.setCalendarPopup(True)
+        self.date_filter.setDate(QDate.currentDate().addDays(-30)) # Last 30 days
+        self.date_filter.setFixedWidth(120)
+        self.date_filter.setStyleSheet(input_style)
+        
+        btn_filter = QPushButton("Filtrar")
+        btn_filter.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_filter.setStyleSheet(btn_style_base)
+        btn_filter.clicked.connect(self.load_data)
+        
+        btn_update = QPushButton("Actualizar")
+        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_update.setStyleSheet(btn_style_base)
+        btn_update.clicked.connect(self.refresh_view)
+        
+        top_layout.addWidget(QLabel("Desde:"))
+        top_layout.addWidget(self.date_filter)
+        top_layout.addWidget(btn_filter)
+        top_layout.addWidget(btn_update)
+        top_layout.addStretch()
         
         # 1. New
         btn_add = QPushButton("➕ Nuevo Movimiento") 
